@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>관리자 — 이건 광고입니다</title>
+  <link rel="icon" href="assets/logos/ad-wanted.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&family=Nanum+Gothic+Coding:wght@400;700&family=Nanum+Pen+Script&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="doc-page">
+  <main class="doc admin sheet" style="--tilt:-.3deg">
+    <span class="pin" style="left:30px"></span><span class="pin" style="right:30px"></span>
+    <h1>관리사무소 · 광고 검수</h1>
+    <form id="admin-login" class="admin__login">
+      <label>관리자 토큰 <input name="token" type="password" autocomplete="off" required></label>
+      <button class="btn btn--primary" type="submit">불러오기</button>
+    </form>
+    <nav id="admin-tabs" class="admin__tabs" aria-label="상태 필터">
+      <button type="button" class="chip" data-status="pending_review">검수 대기</button>
+      <button type="button" class="chip" data-status="active">붙어 있음</button>
+      <button type="button" class="chip" data-status="hidden">떼어 냄</button>
+      <button type="button" class="chip" data-status="refund_required">환불 필요</button>
+      <button type="button" class="chip" data-status="awaiting_deposit">입금 대기</button>
+    </nav>
+    <p id="admin-status" class="status" role="status" aria-live="polite"></p>
+    <ul id="admin-list" class="admin__list"></ul>
+  </main>
+  <script src="admin.js"></script>
+</body>
+</html>

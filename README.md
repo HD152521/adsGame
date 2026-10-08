@@ -1,0 +1,71 @@
+# 이건 광고입니다 (ad-dodge)
+
+디자인 방향: **게시판 복사 전단** — 코르크 게시판에 테이프·압정·스테이플로 붙인 복사지. 광고는 윗변이 뜯긴 쪽지,
+로고는 복사기로 뽑은 흑백(관리자 검수 화면만 원본 색), 플레이어는 매직 졸라맨, 사망 카드는 "목숨 찾습니다" 분실 공고.
+색 5개·글꼴 4역할·자간·기울기 규칙은 `style.css` 머리 주석, 질감 도구는 `paper.js`.
+
+날아오는 광고주 로고를 피하는 모바일 웹 게임. 광고를 숨기지 않고 **게임의 적 그 자체**로 판다.
+
+- PRD: `~/.claude/prds/ad-dodge-game.prd.md` · M1 계획: `~/.claude/plans/ad-dodge-game.plan.md`
+- 주차 기록: [`weeks/w13-ad-dodge`](../../weeks/w13-ad-dodge/)
+
+## 핵심 규칙 (공개 규칙 — 약관 `terms.html`과 같아야 한다)
+- 판매 한도 1,000,000칸, 1칸 = 1,000원
+- 등장 확률 = 내 칸 ÷ **팔린** 전체 칸 (새 구매가 오면 희석). 하우스 광고는 유료 광고가 0개일 때만 나온다. 확률만 약속하고 노출 횟수는 약속하지 않는다
+- **보스** = 하우스 제외 최다 칸 광고(동률이면 먼저 결제). 크고 빠르지만 확률은 그대로
+- **저격 링크**(`/?snipe=<id>`)로 들어온 판만 광고의 20%가 저격 광고
+- 현금·경품 보상 없음
+
+## 실행
+의존성 0 (npm·번들러 없음). Node 20+.
+
+```bash
+cd apps/ad-dodge
+node --test                      # 전체 테스트 (게임 + 서버 통합)
+
+# 기능 테스트(결제 없이 바로 추가): start-test.cmd 더블클릭 → http://127.0.0.1:5173
+
+# 로컬 서버 (모의 PG 입금 버튼 켬)
+ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_DEPOSIT=1 node server/index.js
+#  게임     http://localhost:5173
+#  관리자   http://localhost:5173/admin.html  (토큰 = ADMIN_TOKEN)
+```
+
+서버 없이 `python -m http.server`로 열어도 하우스 광고로 게임만 돈다(구매 버튼 비활성).
+
+| 환경변수 | 설명 |
+|---|---|
+| `ADMIN_TOKEN` | 관리자 토큰 (필수, 16자+) |
+| `WEBHOOK_SECRET` | 모의 PG 웹훅 서명 비밀값 (필수, 16자+) |
+| `FREE_MODE=1` | 테스트 모드 — 결제 없이 주문 즉시 출연 (127.0.0.1 전용) |
+| `DEV_DEPOSIT=1` | 입금 시뮬레이션 버튼·엔드포인트. **운영에서 켜면 공짜 광고가 된다** |
+| `MODERATION_MODE` | `review-all`(기본: 이미지 광고는 관리자 승인) / `auto-approve`(로컬 데모) |
+| `DATA_DIR` | 기본 `./data` (db.json + uploads/, git 제외) |
+| `TRUST_PROXY=1` | 리버스 프록시 뒤에서 X-Forwarded-For로 IP 판별 |
+
+## 구조
+| 파일 | 역할 |
+|---|---|
+| `shares.js` | 지분·가중 추첨·보스·저격 추첨기 (순수, 서버와 공유) |
+| `game.js` | 시뮬레이션: 스폰·이동·충돌·난이도·보스 (순수) |
+| `paper.js` | 질감 도구: 뜯긴 가장자리·복사기 로고 처리·토너·코르크·테이프·매직 동그라미·졸라맨 |
+| `render.js` / `input.js` | 캔버스 그리기(쪽지 캐시) / 상대 드래그·방향키 |
+| `deathcard.js` | 사망 카드(저격 문구 포함) 1080×1920 + 공유 |
+| `api.js` / `buy.js` | 서버 API·SSE / 구매 화면(가상계좌·폴링·저격 링크) |
+| `app.js` | 화면 전환·루프·실시간 배너·킬 순위·신고 배선 |
+| `admin.html` / `terms.html` | 관리자 검수 / 약관 초안 |
+| `server/orders.js` | 주문 상태기계: 입금 대기 → (검수) → 출연 / 가림 / 환불 필요 |
+| `server/payments.js` | PG 인터페이스 + **모의 PG** (가상계좌·HMAC 서명 웹훅) |
+| `server/moderation.js` | 이름 필터·이미지 형식 검증 + 분류기 인터페이스 |
+| `server/app.js` | HTTP 라우팅·레이트 리밋·관리자 인증·정적 파일(허용 목록) |
+
+## 실제 운영 전에 바꿀 것
+1. **실제 PG 연동** — 사업자 등록·PG 가입 후 `server/payments.js`에 같은 인터페이스(`issueVirtualAccount`, `verifyWebhook`)로 구현. PG 문서의 웹훅 검증 방식 그대로
+2. **이미지 자동 필터** — 외부 AI 필터 키로 `classify()` 구현(선정성·폭력·얼굴). 없으면 관리자 수동 승인
+3. `terms.html`의 사업자 정보·연락처 TODO
+4. 호스팅 — 파일 저장소를 쓰므로 영구 디스크가 있는 단일 Node 인스턴스 (서버리스 불가)
+
+## 난이도 튜닝
+`game.js` 상단 상수. 0~40초는 빠르게 오르고, 이후 "연장전"에서 속도·등장 간격·동시 개수가 천천히 계속 올라 상한(SPEED_CAP·SPAWN_INTERVAL_FLOOR·MAX_PROJECTILES_CAP)에서 멈춘다.
+광고는 플레이어 쪽으로 1초에 최대 `homingAt(t)`만큼 꺾이고(14°/s → 49°/s), 플레이어를 지나치면 더 꺾지 않는다(유도 미사일 아님).
+바꾼 뒤 `node --test`의 봇 생존시간 테스트가 회귀를 잡는다. 현재: 가만히 약 2.6초, 단순 회피 봇 중앙값 약 21초(상위 10% 약 40초).

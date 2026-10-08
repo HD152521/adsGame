@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#9a8466">
+  <meta name="description" content="엘리베이터 게시판에 붙은 광고를 피하는 게임. 날아오는 건 전부 누가 돈 내고 붙인 광고.">
+  <meta property="og:title" content="광고 피할 사람 구함">
+  <meta property="og:description" content="날아오는 건 전부 광고. 당신 광고도 여기 붙일 수 있음.">
+  <title>이건 광고입니다</title>
+  <link rel="icon" href="assets/logos/ad-wanted.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&family=Nanum+Gothic+Coding:wght@400;700&family=Nanum+Pen+Script&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-screen="start">
+  <main class="stage">
+    <canvas id="game-canvas" class="game-canvas" aria-label="광고 피하기 게임 화면. 드래그나 방향키로 움직이세요."></canvas>
+
+    <header class="hud" aria-live="off">
+      <p class="hud__time sheet n"><span id="hud-time">0.0</span><small>초</small></p>
+      <p class="hud__top sheet"><small>1위</small> <span id="hud-top" class="h">-</span></p>
+    </header>
+
+    <div id="live-banner" class="live-banner sheet" role="status" aria-live="polite" hidden>
+      <span class="staple" style="left:14px;transform:rotate(-14deg)"></span><span class="staple" style="right:14px;transform:rotate(12deg)"></span>
+      <p class="live-banner__title d">방금 새 광고 붙음</p>
+      <p class="live-banner__text h" data-banner-text></p>
+    </div>
+
+    <!-- 시작: 게시판에 붙은 구인 전단 -->
+    <section id="screen-start" class="overlay overlay--start" aria-labelledby="title">
+      <article class="flyer sheet" style="--tilt:-1.2deg">
+        <span class="tape" style="left:18px"></span><span class="tape" style="right:22px;--tilt:5deg"></span>
+        <p class="flyer__shout h">급구!!</p>
+        <h1 id="title" class="flyer__title d">광고 피할<br>사람 구함</h1>
+        <p class="flyer__line h">날아오는 건 <span class="ring">전부 광고</span></p>
+        <p class="flyer__line h">누가 돈 내고 붙인 거임</p>
+        <p id="offline-note" class="flyer__offline" hidden>게시판 공사 중 · 새 광고는 못 붙이지만 게임은 할 수 있어요</p>
+        <div class="tabs" aria-label="붙어 있는 광고">
+          <div id="board-tabs" class="tabs__list"></div>
+          <button id="btn-buy" class="tab tab--buy" type="button" aria-label="내 광고 붙이기">광고 붙이기</button>
+        </div>
+      </article>
+
+      <p id="snipe-banner" class="postit" style="--tilt:-2deg" hidden>
+        <b class="d"><span id="snipe-name"></span>님이 당신을 저격함</b>
+        <span class="h">이 판은 그 광고가 <span id="rule-snipe">20%</span> 섞여서 날아옴</span>
+      </p>
+
+      <div class="board-row">
+        <section class="pinboard sheet" style="--tilt:1.6deg" aria-labelledby="board-title">
+          <span class="pin" style="left:50%"></span>
+          <h2 id="board-title" class="pinboard__title h">이번 주 붙은 광고</h2>
+          <p class="pinboard__sold"><b id="board-sold" class="n">0</b><span> / 1,000,000칸</span></p>
+          <ol id="board-list" class="ledger"></ol>
+        </section>
+        <button id="btn-play" class="go sheet d" type="button" style="--tilt:-4deg">피하러<br>가기</button>
+      </div>
+
+      <section id="kills" class="pinboard sheet" style="--tilt:-1deg" aria-labelledby="kills-title" hidden>
+        <span class="pin" style="left:22px"></span><span class="pin" style="right:22px"></span>
+        <h2 id="kills-title" class="pinboard__title h">오늘의 킬 순위</h2>
+        <ol id="kills-list" class="ledger ledger--kills"></ol>
+      </section>
+
+      <section class="rules sheet" style="--tilt:.8deg" aria-labelledby="rules-title">
+        <span class="tape" style="left:24px"></span>
+        <h2 id="rules-title" class="rules__title d">게시 규칙</h2>
+        <ul>
+          <li>1칸 1,000원 · 등장 확률은 내 칸 ÷ 팔린 칸</li>
+          <li>새 광고가 붙으면 확률이 줄어요(희석)</li>
+          <li>제일 많이 낸 광고는 <span class="ring ring--sm">보스</span>로 크게 날아와요</li>
+          <li>광고에 맞으면 그 광고주 사이트로 이동해요</li>
+          <li>관리사무소 광고는 붙은 광고가 없을 때만 나와요</li>
+        </ul>
+        <a class="rules__link" href="terms.html">약관 · 환불 · 신고 안내</a>
+      </section>
+    </section>
+
+    <!-- 사망: 분실 공고 -->
+    <section id="screen-dead" class="overlay overlay--dead" aria-labelledby="dead-title" hidden>
+      <h2 id="dead-title" class="visually-hidden">목숨 찾습니다</h2>
+      <img id="card-preview" class="card-preview" alt="" width="1080" height="1920">
+      <div class="actions">
+        <button id="btn-share" class="btn-ink" type="button">스토리에 붙이기</button>
+        <button id="btn-retry" class="btn-sheet sheet" type="button">다시 하기</button>
+      </div>
+      <p id="share-status" class="status h" role="status" aria-live="polite"></p>
+      <div class="actions actions--minor">
+        <button id="btn-buy-dead" class="link-scrawl h" type="button">복수하기: 내 광고 붙이기</button>
+        <button id="btn-home" class="link-scrawl h" type="button">게시판 보기</button>
+      </div>
+      <details id="report" class="report sheet" style="--tilt:-.6deg">
+        <summary class="h">이 광고 신고하기</summary>
+        <div class="report__reasons">
+          <button type="button" class="check" data-reason="rights">내 사진·이름을 썼어요</button>
+          <button type="button" class="check" data-reason="obscene">음란·선정적이에요</button>
+          <button type="button" class="check" data-reason="hate">혐오·욕설이 있어요</button>
+          <button type="button" class="check" data-reason="other">기타</button>
+        </div>
+        <p id="report-status" class="report__result h" role="status" aria-live="polite"></p>
+      </details>
+    </section>
+
+    <!-- 광고 붙이기: 게시 신청서 -->
+    <section id="screen-buy" class="overlay overlay--buy" aria-labelledby="buy-title" hidden>
+      <article class="form-sheet sheet" style="--tilt:-.6deg">
+        <span class="staple" style="left:16px;transform:rotate(-16deg)"></span>
+        <header class="form-sheet__head">
+          <h2 id="buy-title" class="d">광고 게시 신청서</h2>
+          <button id="btn-buy-close" class="link-scrawl h" type="button" aria-label="닫기">안 붙일래요</button>
+        </header>
+
+        <div id="buy-step-form">
+          <button id="buy-resume" class="link-scrawl h" type="button" hidden>지난 신청서 이어 보기</button>
+          <form id="buy-form" class="form" novalidate>
+            <fieldset class="kind">
+              <legend class="lbl">어떤 광고?</legend>
+              <label class="check"><input type="radio" name="kind" value="logo" checked><span>로고 광고</span></label>
+              <label class="check"><input type="radio" name="kind" value="snipe"><span>친구 저격 (닉네임)</span></label>
+            </fieldset>
+
+            <label class="field">
+              <span class="lbl">광고 이름 · 16자 · 쪽지와 공고에 손글씨로 적혀요</span>
+              <input id="buy-name" name="name" type="text" maxlength="16" autocomplete="off" required placeholder="동네치킨">
+            </label>
+
+            <div id="buy-logo-field" class="field">
+              <span class="lbl">로고 이미지 · 복사기로 뽑은 흑백으로 붙어요</span>
+              <input id="buy-logo" name="logo" type="file" accept="image/png,image/jpeg,image/webp">
+              <img id="buy-logo-preview" class="logo-preview" alt="복사기로 뽑힌 로고 미리보기" width="88" height="88" hidden>
+              <span class="hint">사람 얼굴 사진은 안 돼요. 로고·그림·글자만.</span>
+            </div>
+
+            <label class="field">
+              <span class="lbl">이동할 사이트 · 선택 · 이 광고에 맞은 사람이 바로 가요</span>
+              <input id="buy-url" name="landingUrl" type="url" inputmode="url" maxlength="300" autocomplete="url" placeholder="내가게.com">
+              <span class="hint">주소가 있으면 관리사무소 검수 후 붙어요.</span>
+            </label>
+
+            <div class="form__row">
+              <label class="field">
+                <span class="lbl">칸 수</span>
+                <input id="buy-slots" name="slots" type="number" min="1" step="1" value="1" inputmode="numeric" required>
+              </label>
+              <div class="field">
+                <span class="lbl">금액</span>
+                <b id="buy-amount" class="n field__value">1,000원</b>
+              </div>
+              <div class="field">
+                <span class="lbl">지금 붙이면 확률</span>
+                <b id="buy-share" class="n field__value red">-</b>
+              </div>
+            </div>
+
+            <fieldset class="consents">
+              <legend class="lbl">확인 (전부 체크)</legend>
+              <label class="check"><input type="checkbox" name="consentRights"><span>제 로고·이름이거나 당사자 동의를 받았어요</span></label>
+              <label class="check"><input type="checkbox" name="consentDilution"><span>새 광고가 붙으면 확률이 <b>희석</b>되고, 노출 횟수는 보장 안 돼요</span></label>
+              <label class="check"><input type="checkbox" name="consentRefund"><span><a href="terms.html" target="_blank" rel="noopener">약관·환불 규정</a>을 읽었어요</span></label>
+            </fieldset>
+
+            <p id="buy-errors" class="errors h" role="alert"></p>
+            <button id="btn-buy-submit" class="btn-ink" type="submit">가상계좌 받기</button>
+          </form>
+        </div>
+
+        <div id="buy-step-pay" class="pay" hidden>
+          <p id="pay-status" class="pay__status h" role="status" aria-live="polite"></p>
+          <span id="pay-stamp" class="stamp d" hidden>붙임</span>
+          <dl id="pay-account-box" class="slip-receipt">
+            <dt>은행</dt><dd id="pay-bank"></dd>
+            <dt>계좌</dt><dd id="pay-account" class="n"></dd>
+            <dt>예금주</dt><dd id="pay-holder"></dd>
+            <dt>금액</dt><dd id="pay-amount" class="n"></dd>
+            <dt>입금 기한</dt><dd id="pay-due"></dd>
+          </dl>
+          <button id="btn-dev-deposit" class="btn-sheet sheet" type="button" hidden>입금 시뮬레이션 (로컬 테스트)</button>
+          <div id="pay-snipe" class="postit postit--block" style="--tilt:1.5deg" hidden>
+            <b class="d">저격 링크</b>
+            <span class="h">이 링크로 들어온 친구 판에 당신 광고가 섞여 날아가요</span>
+            <input id="pay-snipe-url" class="n" type="text" readonly aria-label="저격 링크">
+            <button id="btn-copy-snipe" class="btn-ink" type="button">저격 링크 복사</button>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script src="rng.js"></script>
+  <script src="paper.js"></script>
+  <script src="shares.js"></script>
+  <script src="game.js"></script>
+  <script src="seed-ledger.js"></script>
+  <script src="render.js"></script>
+  <script src="input.js"></script>
+  <script src="deathcard.js"></script>
+  <script src="api.js"></script>
+  <script src="buy.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
