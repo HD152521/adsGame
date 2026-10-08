@@ -248,3 +248,66 @@ test('[디자인] CSP: Google Fonts(스타일·글꼴)와 종이 기울기용 �
   assert.match(csp, /font-src https:\/\/fonts\.gstatic\.com/);
   assert.match(csp, /script-src 'self';/);
 });
+
+// ── 고도화 엔드포인트 ────────────────────────────────────────────
+test('[백분위] POST /api/runs → 오늘 백분위, 킬·등장 기록', async () => {
+  const order = await buySnipe('백분위', 1);
+  await post('/api/runs', { seconds: 3, killerId: order.advertiserId, seen: { [order.advertiserId]: 4 } });
+  const res = await post('/api/runs', { seconds: 9, killerId: order.advertiserId });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(body.total >= 2);
+  assert.ok(body.betterThan > 0);
+  const view = await (await fetch(`${base}/api/orders/${order.orderId}`)).json();
+  assert.equal(view.stats.seen, 4);
+  assert.equal(view.stats.kills, 2);
+  assert.equal((await post('/api/runs', { seconds: 'x' })).status, 400);
+});
+
+test('[도전장] 만들고 → id로 읽기, 없는 id는 404', async () => {
+  const res = await post('/api/challenges', { name: '도전자', seconds: 12.34 });
+  assert.equal(res.status, 201);
+  const c = await res.json();
+  const got = await (await fetch(`${base}/api/challenges/${c.id}`)).json();
+  assert.deepEqual(got, { id: c.id, name: '도전자', seconds: 12.3 });
+  assert.equal((await fetch(`${base}/api/challenges/ffffffffff`)).status, 404);
+  assert.equal((await post('/api/challenges', { name: '시발', seconds: 3 })).status, 400);
+});
+
+test('[칸 추가] POST /api/orders/:orderId/topup → 같은 광고 칸 증가', async () => {
+  const order = await buySnipe('칸추가', 1);
+  const res = await post(`/api/orders/${order.orderId}/topup`, { slots: 4, consents: CONSENTS });
+  assert.equal(res.status, 201);
+  const topup = await res.json();
+  await post(`/api/dev/deposit/${topup.orderId}`, {});
+  const ledger = await (await fetch(`${base}/api/ledger`)).json();
+  assert.equal(ledger.advertisers.find((a) => a.id === order.advertiserId).slots, 5);
+  assert.equal((await post(`/api/orders/${order.advertiserId}/topup`, { slots: 1, consents: CONSENTS })).status, 400, '공개 id로는 칸 추가 불가');
+});
+
+test('[M1] 사이트 이동은 같은 사람·같은 광고 하루 한 번만 센다', async () => {
+  const s = await start({ classifier: M.autoApproveClassifier() });
+  try {
+    const p = (path, body) => fetch(`${s.base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const order = await (await p('/api/orders', { kind: 'snipe', name: '이동', slots: 1, landingUrl: 'https://a.example', consents: CONSENTS })).json();
+    await p(`/api/dev/deposit/${order.orderId}`, {});
+    for (let i = 0; i < 3; i += 1) await p('/api/runs', { seconds: 3, killerId: order.advertiserId, redirected: true });
+    const view = await (await fetch(`${s.base}/api/orders/${order.orderId}`)).json();
+    assert.equal(view.stats.visits, 1);
+    assert.equal(view.stats.kills, 3, '킬은 판마다');
+  } finally {
+    s.app.close();
+  }
+});
+
+test('[M1] 판 기록은 전용 레이트 리밋(분당 runs회)', async () => {
+  const s = await start({ limits: { orders: 100, kills: 100, reports: 20, runs: 2, windowMs: 60_000 } });
+  try {
+    const hit = () => fetch(`${s.base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ seconds: 1 }) });
+    assert.equal((await hit()).status, 200);
+    assert.equal((await hit()).status, 200);
+    assert.equal((await hit()).status, 429);
+  } finally {
+    s.app.close();
+  }
+});

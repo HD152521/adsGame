@@ -299,6 +299,28 @@ body[data-screen='start'] .hud, body[data-screen='buying'] .hud { visibility: hi
 .btn { font: inherit; cursor: pointer; }
 .btn--primary { background: var(--toner); color: var(--paper); border: 0; padding: 8px 16px; font-family: var(--display); letter-spacing: var(--track-display); }
 
+/* ── 고도화: 소리 버튼 · 목표 기록 · 도전장 · 광고 성과 · 칸 추가 ───────────────── */
+.sound-toggle {
+  position: absolute; z-index: 6; right: var(--gutter); bottom: max(14px, env(safe-area-inset-bottom));
+  --tilt: -2deg; border: 0; padding: 6px 12px; cursor: pointer; font-family: var(--print); font-size: 13px; color: var(--toner);
+}
+body:not([data-screen='playing']) .sound-toggle { display: none; } /* 오버레이 종이를 가리지 않게 — 플레이 중에만 */
+.sound-toggle[aria-pressed='false'] { color: var(--toner-soft); text-decoration: line-through; }
+.sound-toggle:focus-visible { outline: 3px solid var(--pen); outline-offset: 3px; }
+.hud__target { --tilt: 1deg; padding: 2px 10px; font-size: 19px; color: var(--marker); white-space: nowrap; }
+.challenge-make { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.challenge-make input {
+  width: 100%; min-width: 0; border: 0; border-bottom: 1.5px solid var(--toner); background: transparent;
+  font-size: 22px; color: var(--pen); padding: 2px;
+}
+.challenge-make input.n { font-size: 12px; color: var(--toner); }
+.challenge-make .btn-ink { min-height: 44px; font-size: 15px; }
+.challenge-status { margin: 0; min-height: 1.2em; font-size: 19px; color: var(--marker); }
+.stats-note { display: grid; gap: 2px; padding: 10px 12px; border: 1.5px dashed var(--toner-soft); }
+.stats-note b { font-weight: 400; font-size: 21px; line-height: 1.25; }
+.topup { display: grid; gap: 8px; padding-top: 12px; border-top: 1.5px dashed var(--toner-soft); }
+.topup__row { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; align-items: end; }
+
 @media (prefers-reduced-motion: reduce) {
   .overlay .sheet, .overlay .postit, .live-banner.is-live, .stamp { animation: none; }
   .go { transition: none; }

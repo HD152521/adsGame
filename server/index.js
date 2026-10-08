@@ -12,6 +12,7 @@
 
 const path = require('node:path');
 const { createApp } = require('./app.js');
+const { startBackups } = require('./backup.js');
 const M = require('./moderation.js');
 
 const MIN_SECRET_LENGTH = 16;
@@ -36,8 +37,9 @@ const host = devMode || freeMode ? '127.0.0.1' : '0.0.0.0';
 if (freeMode) console.warn('[config] ⚠ FREE_MODE=1 — 결제 없이 광고가 바로 추가됩니다(테스트 모드). 127.0.0.1 에만 엽니다.');
 if (devMode) console.warn('[config] ⚠ DEV_DEPOSIT=1 — 모의 입금이 켜져 있습니다. 127.0.0.1 에만 열고, 운영에서는 절대 켜지 마세요.');
 
+const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 const app = createApp({
-  dataDir: path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data')),
+  dataDir,
   adminToken: requireSecret('ADMIN_TOKEN'),
   webhookSecret: requireSecret('WEBHOOK_SECRET'),
   devMode,
@@ -46,6 +48,8 @@ const app = createApp({
   trustProxy: process.env.TRUST_PROXY === '1',
 });
 
+startBackups({ dataDir }); // 1시간마다 data/backups/ 에 장부 사본(이틀치 보관)
+
 app.server.listen(port, host, () => {
   console.info(`[server] http://${devMode || freeMode ? "127.0.0.1" : "localhost"}:${port}  (테스트모드=${freeMode ? '켜짐' : '꺼짐'}, 모의입금=${devMode ? '켜짐' : '꺼짐'}, 검수=${moderationMode})`);
   console.info(`[server] 관리자: /admin.html`);
@@ -53,7 +57,7 @@ app.server.listen(port, host, () => {
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
-    app.close();
+    app.close(); // 밀린 놀이 기록(lazy)도 여기서 디스크에 쓴다
     process.exit(0);
   });
 }

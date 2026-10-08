@@ -20,8 +20,10 @@
 
     <header class="hud" aria-live="off">
       <p class="hud__time sheet n"><span id="hud-time">0.0</span><small>초</small></p>
+      <p id="hud-target" class="hud__target sheet h" hidden></p>
       <p class="hud__top sheet"><small>1위</small> <span id="hud-top" class="h">-</span></p>
     </header>
+    <button id="btn-sound" class="sound-toggle sheet" type="button" aria-pressed="true">소리 켬</button>
 
     <div id="live-banner" class="live-banner sheet" role="status" aria-live="polite" hidden>
       <span class="staple" style="left:14px;transform:rotate(-14deg)"></span><span class="staple" style="right:14px;transform:rotate(12deg)"></span>
@@ -47,6 +49,11 @@
       <p id="snipe-banner" class="postit" style="--tilt:-2deg" hidden>
         <b class="d"><span id="snipe-name"></span>님이 당신을 저격함</b>
         <span class="h">이 판은 그 광고가 <span id="rule-snipe">20%</span> 섞여서 날아옴</span>
+      </p>
+
+      <p id="challenge-banner" class="postit" style="--tilt:1.5deg" hidden>
+        <b class="d"><span id="challenge-from"></span>님의 도전장</b>
+        <span class="h"><span id="challenge-seconds" class="n"></span>초 넘어 보시든가</span>
       </p>
 
       <div class="board-row">
@@ -92,6 +99,18 @@
         <button id="btn-buy-dead" class="link-scrawl h" type="button">복수하기: 내 광고 붙이기</button>
         <button id="btn-home" class="link-scrawl h" type="button">게시판 보기</button>
       </div>
+      <section id="challenge-box" class="postit postit--block" style="--tilt:1deg" aria-labelledby="challenge-title" hidden>
+        <b id="challenge-title" class="d">친구한테 도전장 보내기</b>
+        <div id="challenge-make" class="challenge-make">
+          <input id="challenge-name" class="h" type="text" maxlength="16" autocomplete="nickname" placeholder="내 이름" aria-label="도전장에 적을 내 이름">
+          <button id="btn-challenge-make" class="btn-ink" type="button">도전장 만들기</button>
+        </div>
+        <div id="challenge-made" class="challenge-make" hidden>
+          <input id="challenge-url" class="n" type="text" readonly aria-label="도전장 링크">
+          <button id="btn-challenge-share" class="btn-ink" type="button">보내기</button>
+        </div>
+        <p id="challenge-status" class="challenge-status h" role="status" aria-live="polite"></p>
+      </section>
       <details id="report" class="report sheet" style="--tilt:-.6deg">
         <summary class="h">이 광고 신고하기</summary>
         <div class="report__reasons">
@@ -114,7 +133,7 @@
         </header>
 
         <div id="buy-step-form">
-          <button id="buy-resume" class="link-scrawl h" type="button" hidden>지난 신청서 이어 보기</button>
+          <button id="buy-resume" class="link-scrawl h" type="button" hidden>내 광고 보기 · 성과 · 칸 추가</button>
           <form id="buy-form" class="form" novalidate>
             <fieldset class="kind">
               <legend class="lbl">어떤 광고?</legend>
@@ -177,6 +196,18 @@
             <dt>금액</dt><dd id="pay-amount" class="n"></dd>
             <dt>입금 기한</dt><dd id="pay-due"></dd>
           </dl>
+          <div id="pay-stats" class="stats-note" hidden>
+            <span class="lbl">참고 기록 (약속 아님)</span>
+            <b id="pay-stats-text" class="h"></b>
+          </div>
+          <div id="pay-topup" class="topup" hidden>
+            <span class="lbl">이 광고에 칸 더 붙이기 · 1칸 1,000원</span>
+            <div class="topup__row">
+              <label class="field"><span class="lbl">추가 칸 수</span><input id="topup-slots" type="number" min="1" step="1" value="10" inputmode="numeric"></label>
+              <label class="check"><input id="topup-consent" type="checkbox"><span>같은 약관·희석 규칙에 동의</span></label>
+            </div>
+            <button id="btn-topup" class="btn-ink" type="button">칸 더 붙이기</button>
+          </div>
           <button id="btn-dev-deposit" class="btn-sheet sheet" type="button" hidden>입금 시뮬레이션 (로컬 테스트)</button>
           <div id="pay-snipe" class="postit postit--block" style="--tilt:1.5deg" hidden>
             <b class="d">저격 링크</b>
@@ -197,6 +228,7 @@
   <script src="render.js"></script>
   <script src="input.js"></script>
   <script src="deathcard.js"></script>
+  <script src="sound.js"></script>
   <script src="api.js"></script>
   <script src="buy.js"></script>
   <script src="app.js"></script>

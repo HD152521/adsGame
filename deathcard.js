@@ -27,7 +27,29 @@ function formatSeconds(s) {
   return `${s.toFixed(1)}초`;
 }
 
-function buildDeathCardText({ killerId, sniperId = null, survivedSeconds, dodged, names }) {
+/** 나보다 짧게 버틴 비율 → "상위 N%". 상위 0%는 이상하니 최소 1% */
+function formatTopPercent(betterThan) {
+  if (betterThan === null || betterThan === undefined) return null;
+  return `상위 ${Math.max(1, Math.ceil((1 - betterThan) * 100))}%`;
+}
+
+/** 도전장 결과 — 도전 기록을 넘었는지 */
+function challengeResult(challenge, survivedSeconds) {
+  if (!challenge) return null;
+  const won = survivedSeconds > challenge.seconds;
+  return {
+    won,
+    text: won ? `${challenge.name} 격파! (${challenge.seconds}초 넘김)` : `${challenge.name}에게 졌다 (${challenge.seconds}초)`,
+  };
+}
+
+function rankLineOf(percentile) {
+  if (!percentile) return null;
+  if (percentile.betterThan === null) return '오늘 첫 기록';
+  return `오늘 ${percentile.total.toLocaleString('ko-KR')}판 중 ${formatTopPercent(percentile.betterThan)}`;
+}
+
+function buildDeathCardText({ killerId, sniperId = null, survivedSeconds, dodged, names, nearMisses = 0, percentile = null, challenge = null }) {
   const nameOf = (id) => truncateName(names[id] || UNKNOWN_NAME);
   const killerName = nameOf(killerId);
   const top = Object.entries(dodged)
@@ -38,14 +60,20 @@ function buildDeathCardText({ killerId, sniperId = null, survivedSeconds, dodged
   const survived = `${formatSeconds(survivedSeconds)} 버팀`;
   const sniped = sniperId !== null && killerId === sniperId;
   const dodgedTotal = Object.values(dodged).reduce((sum, n) => sum + n, 0);
+  const rankLine = rankLineOf(percentile);
+  const vs = challengeResult(challenge, survivedSeconds);
+  const extras = [rankLine && rankLine !== '오늘 첫 기록' ? rankLine : null, vs ? vs.text : null].filter(Boolean).join(' · ');
   return {
     headline: sniped ? `${killerName}님의 광고에 당했습니다` : `당신은 ${killerName}에게 죽었습니다`,
     sniped,
     dodgedTotal,
+    nearMisses,
+    rankLine,
+    challenge: vs,
     killerName,
     survived,
     top,
-    shareText: `목숨 찾습니다… ${killerName} 광고 맞고 ${formatSeconds(survivedSeconds)} 만에 사라짐. 이 게시판 광고 전부 돈 내고 붙인 거임`,
+    shareText: `목숨 찾습니다… ${killerName} 광고 맞고 ${formatSeconds(survivedSeconds)} 만에 사라짐.${extras ? ` ${extras}.` : ''} 이 게시판 광고 전부 돈 내고 붙인 거임`,
   };
 }
 
@@ -149,20 +177,29 @@ function drawNoticeText(ctx, text) {
   const whoWidth = Math.min(ctx.measureText(who).width, SHEET.w - 80);
   D.drawMarkerRing(ctx, cx, 774, whoWidth / 2 + 56, 70, 6);
 
-  ctx.font = `76px ${D.PAPER_FONTS.hand}`;
-  ctx.fillText('버틴 시간', cx - 150, 950);
-  ctx.fillText('피한 광고', cx - 150, 1060);
-  ctx.font = `700 76px ${D.PAPER_FONTS.type}`;
-  setTracking(ctx, 2);
-  ctx.textAlign = 'left';
-  ctx.fillText(text.survived.replace(' 버팀', ''), cx + 10, 950);
-  ctx.fillText(`${text.dodgedTotal}장`, cx + 10, 1060);
-  setTracking(ctx, 0);
+  const rows = [['버틴 시간', text.survived.replace(' 버팀', '')], ['피한 광고', `${text.dodgedTotal}장`], ['아슬아슬', `${text.nearMisses}번`]];
+  rows.forEach(([label, value], k) => {
+    const y = 925 + k * 92;
+    ctx.textAlign = 'center';
+    ctx.font = `70px ${D.PAPER_FONTS.hand}`;
+    ctx.fillText(label, cx - 150, y);
+    ctx.textAlign = 'left';
+    ctx.font = `700 70px ${D.PAPER_FONTS.type}`;
+    setTracking(ctx, 2);
+    ctx.fillText(value, cx + 10, y);
+    setTracking(ctx, 0);
+  });
 
   ctx.textAlign = 'center';
-  ctx.font = `60px ${D.PAPER_FONTS.hand}`;
-  ctx.fillStyle = D.PAPER_COLORS.tonerSoft;
-  ctx.fillText('보신 분은 스토리에 붙여 주세요 · 사례 없음', cx, 1190, SHEET.w - 80);
+  if (text.rankLine) {
+    ctx.fillStyle = D.PAPER_COLORS.marker;
+    ctx.font = `72px ${D.PAPER_FONTS.hand}`;
+    ctx.fillText(text.rankLine, cx, 1205, SHEET.w - 80);
+  } else {
+    ctx.font = `56px ${D.PAPER_FONTS.hand}`;
+    ctx.fillStyle = D.PAPER_COLORS.tonerSoft;
+    ctx.fillText('보신 분은 스토리에 붙여 주세요 · 사례 없음', cx, 1200, SHEET.w - 80);
+  }
 }
 
 /** text: buildDeathCardText 결과, killer: { id, img(로드된 Image)|null } */
@@ -207,7 +244,8 @@ function drawDeathCard(canvas, text, killer = null) {
   ctx.font = `62px ${CARD_DEPS.PAPER_FONTS.hand}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('당신 광고도 여기 붙일 수 있음', 0, 0, 460);
+  ctx.fillStyle = text.challenge && text.challenge.won ? CARD_DEPS.PAPER_COLORS.marker : CARD_DEPS.PAPER_COLORS.toner;
+  ctx.fillText(text.challenge ? text.challenge.text : '당신 광고도 여기 붙일 수 있음', 0, 0, 460);
   ctx.restore();
   return canvas;
 }
@@ -243,6 +281,8 @@ if (typeof module !== 'undefined') {
     truncateName,
     formatSeconds,
     buildDeathCardText,
+    formatTopPercent,
+    challengeResult,
     drawDeathCard,
     shareDeathCard,
   };

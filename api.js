@@ -57,15 +57,18 @@ const api = {
   createOrder: (form) => apiRequest('/api/orders', { method: 'POST', body: form }),
   order: (orderId) => apiRequest(`/api/orders/${encodeURIComponent(orderId)}`),
   devDeposit: (orderId) => apiRequest(`/api/dev/deposit/${encodeURIComponent(orderId)}`, { method: 'POST', body: {} }),
-  // 죽자마자 광고주 사이트로 이동해도 킬 기록이 끊기지 않게 sendBeacon(페이지를 떠나도 브라우저가 전송 보장).
+  /** 한 판 기록 → 오늘 백분위 { betterThan, total } (+ 킬·등장 집계) */
+  run: (payload) => apiRequest('/api/runs', { method: 'POST', body: payload }),
+  // 죽자마자 광고주 사이트로 이동할 때는 sendBeacon(페이지를 떠나도 브라우저가 전송 보장).
   // fetch keepalive만으로는 이동 직후 요청이 유실되는 것을 실제로 확인했다.
-  kill(advId) {
-    const payload = JSON.stringify({ advId });
-    if (typeof navigator !== 'undefined' && navigator.sendBeacon && navigator.sendBeacon('/api/kills', new Blob([payload], { type: 'application/json' }))) {
-      return Promise.resolve(null);
-    }
-    return apiRequest('/api/kills', { method: 'POST', body: { advId }, keepalive: true });
+  runBeacon(payload) {
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon && navigator.sendBeacon('/api/runs', blob)) return;
+    apiRequest('/api/runs', { method: 'POST', body: payload, keepalive: true }).catch(() => {});
   },
+  createChallenge: (name, seconds) => apiRequest('/api/challenges', { method: 'POST', body: { name, seconds } }),
+  challenge: (id) => apiRequest(`/api/challenges/${encodeURIComponent(id)}`),
+  topup: (orderId, body) => apiRequest(`/api/orders/${encodeURIComponent(orderId)}/topup`, { method: 'POST', body }),
   killRanking: () => apiRequest('/api/kills/today'),
   report: (advId, reason) => apiRequest('/api/reports', { method: 'POST', body: { advId, reason } }),
   /** handlers: { purchase(data), takedown(data), reconnect() } → 구독 해제 함수.

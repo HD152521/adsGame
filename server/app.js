@@ -10,6 +10,9 @@
 //   POST /api/payments/webhook       PG 웹훅(서명 검증)
 //   POST /api/kills  | GET /api/kills/today
 //   POST /api/reports
+//   POST /api/runs                   판 기록 → 오늘 백분위(+킬·등장·사이트 이동 집계)
+//   POST /api/challenges | GET /api/challenges/:id   도전장
+//   POST /api/orders/:orderId/topup  붙어 있는 내 광고에 칸 추가(orderId = 소유 증명)
 // 테스트 모드(freeMode): 주문하면 결제 없이 바로 출연
 // 개발 전용(devMode): POST /api/dev/deposit/:orderId — 은행 입금 흉내(서명된 웹훅을 내부에서 발생)
 // 관리자(Bearer ADMIN_TOKEN): GET /api/admin/advertisers?status= · POST /api/admin/advertisers/:id/:action
@@ -27,7 +30,8 @@ const { HttpError, readBody, parseJson, sendJson, serveStatic } = require('./htt
 const { SEED_LEDGER } = require('../seed-ledger.js');
 
 const APP_ROOT = path.join(__dirname, '..');
-const DEFAULT_LIMITS = { orders: 5, kills: 60, reports: 10, windowMs: 60_000 };
+const DEFAULT_LIMITS = { orders: 5, kills: 60, reports: 10, challenges: 10, runs: 15, windowMs: 60_000 };
+const VISIT_DEDUP_MAX = 50_000; // 하루치 (IP·광고) 쌍 기억 상한 — 넘치면 비우고 다시
 
 // TRUST_PROXY=1 은 "앞단에 신뢰하는 프록시가 정확히 한 단" 있다는 뜻이다. 프록시는 X-Forwarded-For 끝에
 // 실제 접속 IP를 덧붙이므로 **마지막** 값만 믿는다 — 앞쪽 값은 클라이언트가 마음대로 넣을 수 있다(보안 리뷰 H1).
@@ -56,8 +60,9 @@ function createImageSaver(dataDir) {
 function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, now = Date.now }) {
   const hub = createEventHub();
   const provider = createMockProvider({ secret: webhookSecret, now });
+  const store = createStore({ file: path.join(dataDir, 'db.json') });
   const service = createOrderService({
-    store: createStore({ file: path.join(dataDir, 'db.json') }),
+    store,
     provider,
     classifier,
     saveImage: createImageSaver(dataDir),
@@ -70,6 +75,23 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMo
     orders: createRateLimiter({ limit: limits.orders, windowMs: limits.windowMs, now }),
     kills: createRateLimiter({ limit: limits.kills, windowMs: limits.windowMs, now }),
     reports: createRateLimiter({ limit: limits.reports, windowMs: limits.windowMs, now }),
+    challenges: createRateLimiter({ limit: limits.challenges || DEFAULT_LIMITS.challenges, windowMs: limits.windowMs, now }),
+    // 한 판은 최소 몇 초 — 분당 15판 넘게 보고하면 사람이 아니다(광고 성과 부풀리기 방어, 리뷰 M1)
+    runs: createRateLimiter({ limit: limits.runs || DEFAULT_LIMITS.runs, windowMs: limits.windowMs, now }),
+  };
+  // 사이트 이동은 같은 사람·같은 광고 하루 한 번만 센다(클라이언트 보고값이라 반복 보고로 부풀릴 수 있음)
+  let visitDay = '';
+  let visited = new Set();
+  const firstVisitToday = (ip, advId) => {
+    const day = new Date(now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+    if (day !== visitDay || visited.size > VISIT_DEDUP_MAX) {
+      visitDay = day;
+      visited = new Set();
+    }
+    const key = `${ip}|${advId}`;
+    if (visited.has(key)) return false;
+    visited.add(key);
+    return true;
   };
   const reporterSalt = crypto.randomBytes(16).toString('hex');
 
@@ -140,11 +162,31 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMo
         return hub.handle(req, res, clientIp(req, trustProxy));
       case 'POST orders': {
         limit(req, 'orders');
+        if (parts[2] === 'topup') {
+          const body = parseJson(await readBody(req));
+          return sendJson(res, 201, asUserError(() => service.createTopup(String(parts[1]), body)));
+        }
         const body = parseJson(await readBody(req));
         const order = await service.createOrder(body).catch((err) => {
           throw new HttpError(400, err.message);
         });
         return sendJson(res, 201, order);
+      }
+      case 'POST runs': {
+        limit(req, 'runs');
+        const body = parseJson(await readBody(req));
+        const redirected = body.redirected === true && Boolean(body.killerId) && firstVisitToday(clientIp(req, trustProxy), String(body.killerId));
+        return sendJson(res, 200, asUserError(() => service.recordRun({ ...body, redirected })));
+      }
+      case 'POST challenges': {
+        limit(req, 'challenges');
+        const body = parseJson(await readBody(req));
+        return sendJson(res, 201, asUserError(() => service.createChallenge(body)));
+      }
+      case 'GET challenges': {
+        const c = service.getChallenge(String(parts[1] || ''));
+        if (!c) throw new HttpError(404, '도전장을 찾을 수 없어요');
+        return sendJson(res, 200, c);
       }
       case 'GET orders': {
         const order = service.getOrder(parts[1]);
@@ -192,6 +234,8 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMo
     service,
     provider,
     close() {
+      store.flush();
+      store.close();
       hub.close();
       server.close();
       server.closeAllConnections?.();

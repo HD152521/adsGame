@@ -17,6 +17,7 @@ const crypto = require('node:crypto');
 const { SLOT_PRICE, MAX_SLOTS, computeShares, findBossId, SNIPE_RATE } = require('../shares.js');
 const { BOSS_SIZE_MULTIPLIER } = require('../game.js');
 const { validateName, decodeImage, validateLandingUrl } = require('./moderation.js');
+const { createStatsService } = require('./stats.js');
 
 const ORDER_STATUS = Object.freeze({
   AWAITING_DEPOSIT: 'awaiting_deposit',
@@ -28,8 +29,6 @@ const ORDER_STATUS = Object.freeze({
 const MAX_SLOTS_PER_ORDER = 100000; // 1억 원 — 오입력 방지
 const REPORT_HIDE_THRESHOLD = 3;
 const REPORT_REASONS = new Set(['rights', 'obscene', 'hate', 'other']);
-const KILL_RANKING_SIZE = 10;
-const KST_OFFSET_MS = 9 * 3600 * 1000;
 const KINDS = new Set(['logo', 'snipe']);
 
 const randomId = (bytes) => crypto.randomBytes(bytes).toString('hex');
@@ -50,10 +49,13 @@ function assertSlots(slots) {
 // instantActivate: 테스트 모드(FREE_MODE) — 결제 단계 없이 주문 즉시 입금 확정 처리. 검수 규칙은 그대로 적용된다.
 function createOrderService({ store, provider, classifier, saveImage, broadcast, now, seedLedger, instantActivate = false }) {
   const orders = () => store.read().orders;
-  const findByAdvertiser = (advId) => Object.values(orders()).find((o) => o.advertiserId === advId) || null;
+  // 칸 추가 구매로 한 광고(advertiserId)가 주문 여러 건으로 나뉠 수 있다 — 가림·복구는 언제나 함께
+  const ordersOf = (advId) => Object.values(orders()).filter((o) => o.advertiserId === advId);
+  const findByAdvertiser = (advId) => ordersOf(advId).sort((a, b) => a.createdAt - b.createdAt)[0] || null;
   const putOrder = (order) => store.update((s) => ({ ...s, orders: { ...s.orders, [order.orderId]: order } }));
   const activeOrders = () => Object.values(orders()).filter((o) => o.status === ORDER_STATUS.ACTIVE);
   const soldSlots = () => activeOrders().reduce((sum, o) => sum + o.slots, 0);
+  const stats = createStatsService({ store, now, getLedger: () => getLedger() });
 
   // 확률 분모 = "팔린" 칸(PRD 핵심 규칙). 하우스 광고는 유료 광고가 하나도 없을 때만 빈 화면을 채운다 —
   // 유료가 생기는 순간 빠진다. (하우스를 섞으면 첫 광고주 1칸이 100%가 아니라 1%가 된다.)
@@ -89,6 +91,8 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
       virtualAccount: o.virtualAccount,
       logoUrl: o.logoUrl,
       landingUrl: o.landingUrl || null,
+      topup: Boolean(o.parentOrderId),
+      stats: stats.statsFor(o.advertiserId),
       snipeUrl: `/?snipe=${o.advertiserId}`,
     };
   }
@@ -140,6 +144,33 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     return publicView(order);
   }
 
+  /** 칸 추가: 붙어 있는 내 광고(orderId = 소유 증명)에 칸만 더한다. 이미 검수된 내용이라 다시 검수하지 않는다 */
+  function createTopup(parentOrderId, { slots, consents }) {
+    const parent = orders()[parentOrderId];
+    if (!parent) throw new Error('주문을 찾을 수 없습니다');
+    if (parent.status !== ORDER_STATUS.ACTIVE) throw new Error('붙어 있는 광고에만 칸을 더할 수 있어요');
+    assertConsents(consents);
+    assertSlots(slots);
+    if (soldSlots() + slots > MAX_SLOTS) throw new Error('남은 칸보다 많이 살 수 없어요');
+    const orderId = randomId(16);
+    const amount = slots * SLOT_PRICE;
+    const order = {
+      ...parent,
+      orderId,
+      parentOrderId,
+      slots,
+      amount,
+      status: ORDER_STATUS.AWAITING_DEPOSIT,
+      review: false,
+      virtualAccount: provider.issueVirtualAccount({ orderId, amount }),
+      createdAt: now(),
+      paidAt: null,
+    };
+    putOrder(order);
+    if (instantActivate) return confirmDeposit({ orderId, status: 'DONE', amount });
+    return publicView(order);
+  }
+
   function confirmDeposit({ orderId, status, amount }) {
     const order = orders()[orderId];
     if (!order) throw new Error('주문을 찾을 수 없습니다');
@@ -149,8 +180,10 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     const paidAt = now();
     const late = paidAt > order.virtualAccount.dueAt;
     const overflow = soldSlots() + order.slots > MAX_SLOTS;
+    // 칸 추가 입금 사이에 원래 광고가 가려지거나 내려갔으면 붙이지 않고 환불
+    const parentGone = order.parentOrderId && (orders()[order.parentOrderId] || {}).status !== ORDER_STATUS.ACTIVE;
     let next = ORDER_STATUS.ACTIVE;
-    if (late || overflow) next = ORDER_STATUS.REFUND_REQUIRED;
+    if (late || overflow || parentGone) next = ORDER_STATUS.REFUND_REQUIRED;
     else if (order.review) next = ORDER_STATUS.PENDING_REVIEW;
 
     const updated = { ...order, status: next, paidAt };
@@ -167,13 +200,14 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     restore: { from: [ORDER_STATUS.HIDDEN], to: ORDER_STATUS.ACTIVE },
   };
 
-  function setStatus(order, status) {
-    const wasActive = order.status === ORDER_STATUS.ACTIVE;
-    const updated = { ...order, status };
-    putOrder(updated);
-    if (wasActive && status !== ORDER_STATUS.ACTIVE) broadcast('takedown', { advertiserId: order.advertiserId });
-    if (!wasActive && status === ORDER_STATUS.ACTIVE) announceActive(updated);
-    return updated;
+  /** 한 광고의 주문들 중 fromStatuses에 있는 것을 전부 status로 — 알림은 광고당 한 번 */
+  function setAdvertiserStatus(advId, fromStatuses, status) {
+    const targets = ordersOf(advId).filter((o) => fromStatuses.includes(o.status));
+    const wasActive = targets.some((o) => o.status === ORDER_STATUS.ACTIVE);
+    for (const o of targets) putOrder({ ...o, status });
+    if (wasActive && status !== ORDER_STATUS.ACTIVE) broadcast('takedown', { advertiserId: advId });
+    if (!wasActive && status === ORDER_STATUS.ACTIVE && targets.length > 0) announceActive(targets[0]);
+    return targets;
   }
 
   function adminAction(advId, action) {
@@ -183,7 +217,8 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     if (!order) throw new Error('광고를 찾을 수 없습니다');
     if (!rule.from.includes(order.status)) throw new Error(`${order.status} 상태에서는 ${action} 할 수 없습니다`);
     if (action === 'restore') store.update((s) => ({ ...s, reports: { ...s.reports, [advId]: { reporters: [], rights: false } } }));
-    return publicView(setStatus(order, rule.to));
+    setAdvertiserStatus(advId, rule.from, rule.to);
+    return publicView(orders()[order.orderId]);
   }
 
   function report({ advId, reason, reporter }) {
@@ -195,32 +230,11 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     const next = { reporters, rights: prev.rights || reason === 'rights' };
     store.update((s) => ({ ...s, reports: { ...s.reports, [advId]: next } }));
     const shouldHide = next.rights || reporters.length >= REPORT_HIDE_THRESHOLD;
-    if (shouldHide && order.status === ORDER_STATUS.ACTIVE) {
-      setStatus(order, ORDER_STATUS.HIDDEN);
+    if (shouldHide && ordersOf(advId).some((o) => o.status === ORDER_STATUS.ACTIVE)) {
+      setAdvertiserStatus(advId, [ORDER_STATUS.ACTIVE], ORDER_STATUS.HIDDEN);
       return { hidden: true };
     }
     return { hidden: false };
-  }
-
-  const todayKey = () => new Date(now() + KST_OFFSET_MS).toISOString().slice(0, 10);
-
-  function recordKill(advId) {
-    if (!getLedger().advertisers.some((a) => a.id === advId)) throw new Error('장부에 없는 광고입니다');
-    const day = todayKey();
-    store.update((s) => {
-      const counts = s.kills[day] || {};
-      return { ...s, kills: { [day]: { ...counts, [advId]: (counts[advId] || 0) + 1 } } }; // 오늘 것만 유지
-    });
-  }
-
-  function getKillRanking() {
-    const counts = store.read().kills[todayKey()] || {};
-    const byId = new Map(getLedger().advertisers.map((a) => [a.id, a]));
-    return Object.entries(counts)
-      .filter(([id]) => byId.has(id))
-      .map(([id, kills]) => ({ id, name: byId.get(id).name, isHouse: byId.get(id).isHouse, kills }))
-      .sort((a, b) => b.kills - a.kills)
-      .slice(0, KILL_RANKING_SIZE);
   }
 
   function listAdvertisers(status) {
@@ -233,14 +247,18 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
 
   return {
     createOrder,
+    createTopup,
     confirmDeposit,
     getOrder: (orderId) => publicView(orders()[orderId]),
     getLedger,
     adminAction,
     report,
-    recordKill,
-    getKillRanking,
     listAdvertisers,
+    recordKill: stats.recordKill,
+    recordRun: stats.recordRun,
+    getKillRanking: stats.getKillRanking,
+    createChallenge: stats.createChallenge,
+    getChallenge: stats.getChallenge,
   };
 }
 

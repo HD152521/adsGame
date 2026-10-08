@@ -10,6 +10,7 @@ const ORDER_POLL_MS = 2500;
 const ORDER_STORAGE_KEY = 'ad-dodge:last-order';
 const FINAL_STATUSES = new Set(['active', 'refund_required', 'expired', 'hidden']);
 const SNIPE_ID_RE = /^[a-f0-9]{6,32}$/;
+const CHALLENGE_ID_RE = /^[a-f0-9]{10}$/;
 
 const STATUS_MESSAGES = {
   awaiting_deposit: '아래 계좌로 입금하면 바로 붙여 드려요',
@@ -64,6 +65,26 @@ function buildSnipeUrl(origin, advertiserId) {
 function readSnipeId(search) {
   const id = new URLSearchParams(search).get('snipe');
   return id && SNIPE_ID_RE.test(id) ? id : null;
+}
+
+function readChallengeId(search) {
+  const id = new URLSearchParams(search).get('challenge');
+  return id && CHALLENGE_ID_RE.test(id) ? id : null;
+}
+
+function buildChallengeUrl(origin, id) {
+  return `${origin}/?challenge=${id}`;
+}
+
+/** 광고 성과(참고용 기록 — 약속 아님) */
+function statsText(stats) {
+  if (!stats || (stats.seen === 0 && stats.kills === 0 && stats.visits === 0)) return '아직 기록 없음 — 곧 날아가요';
+  const f = (n) => n.toLocaleString('ko-KR');
+  return `${f(stats.seen)}번 날아감 · ${f(stats.kills)}명 쓰러뜨림 · 사이트 이동 ${f(stats.visits)}회`;
+}
+
+function canTopup(status) {
+  return status === 'active';
 }
 
 function orderStatusMessage(status) {
@@ -123,10 +144,10 @@ function loadLastOrder() {
 }
 
 /**
- * deps: { doc, api, getLedger: () => ledger, config: { devDeposit }, onClose() }
+ * deps: { doc, api, getLedger: () => ledger, config: { devDeposit, freeMode }, onClose(), onPosted() }
  * 반환: { open() }
  */
-function createBuyFlow({ doc, api, getLedger, config, onClose }) {
+function createBuyFlow({ doc, api, getLedger, config, onClose, onPosted = () => {} }) {
   const $ = (id) => doc.getElementById(id);
   const form = $('buy-form');
   $('btn-buy-submit').textContent = submitLabel(config);
@@ -171,7 +192,12 @@ function createBuyFlow({ doc, api, getLedger, config, onClose }) {
     $('pay-amount').textContent = formatWon(order.amount);
     $('pay-due').textContent = new Date(order.virtualAccount.dueAt).toLocaleString('ko-KR');
     $('pay-account-box').hidden = order.status !== 'awaiting_deposit';
+    const wasPosted = !$('pay-stamp').hidden;
     $('pay-stamp').hidden = order.status !== 'active';
+    if (order.status === 'active' && !wasPosted) onPosted();
+    $('pay-stats').hidden = order.status !== 'active';
+    $('pay-stats-text').textContent = statsText(order.stats);
+    $('pay-topup').hidden = !canTopup(order.status);
     $('btn-dev-deposit').hidden = !(config.devDeposit && order.status === 'awaiting_deposit');
     const snipe = order.kind === 'snipe' && order.status === 'active';
     $('pay-snipe').hidden = !snipe;
@@ -238,6 +264,31 @@ function createBuyFlow({ doc, api, getLedger, config, onClose }) {
       $('pay-status').textContent = err.message;
     }
   });
+  $('btn-topup').addEventListener('click', async () => {
+    const slots = Number($('topup-slots').value);
+    if (!Number.isInteger(slots) || slots < 1) {
+      $('pay-status').textContent = '추가할 칸 수를 1 이상 정수로 적어 주세요';
+      return;
+    }
+    if (!$('topup-consent').checked) {
+      $('pay-status').textContent = '같은 약관·희석 규칙에 동의해 주세요';
+      return;
+    }
+    const button = $('btn-topup');
+    button.disabled = true;
+    try {
+      const consents = { rights: true, dilution: true, refund: true };
+      const order = await api.topup($('buy-step-pay').dataset.orderId, { slots, consents });
+      $('buy-step-pay').dataset.orderId = order.orderId;
+      $('pay-stamp').hidden = true;
+      renderOrder(order);
+      poll(order.orderId);
+    } catch (err) {
+      $('pay-status').textContent = err.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
   $('btn-copy-snipe').addEventListener('click', async () => {
     const input = $('pay-snipe-url');
     try {
@@ -273,5 +324,5 @@ function createBuyFlow({ doc, api, getLedger, config, onClose }) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { submitLabel, paidSlots, estimateShare, formatWon, validateBuyForm, buildSnipeUrl, readSnipeId, orderStatusMessage, isFinalStatus, purchaseBannerText };
+  module.exports = { readChallengeId, buildChallengeUrl, statsText, canTopup, submitLabel, paidSlots, estimateShare, formatWon, validateBuyForm, buildSnipeUrl, readSnipeId, orderStatusMessage, isFinalStatus, purchaseBannerText };
 }

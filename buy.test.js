@@ -70,3 +70,21 @@ test('[이동 주소] validateBuyForm: 이동 주소는 선택, 스크립트 주
   assert.deepEqual(B.validateBuyForm({ ...ok, landingUrl: 'https://a.kr' }), []);
   assert.ok(B.validateBuyForm({ ...ok, landingUrl: 'javascript:alert(1)' }).some((e) => /주소/.test(e)));
 });
+
+test('[성과] statsText: 참고용 기록 문구(천 단위 쉼표)', () => {
+  assert.equal(B.statsText({ seen: 1240, kills: 87, visits: 52 }), '1,240번 날아감 · 87명 쓰러뜨림 · 사이트 이동 52회');
+  assert.equal(B.statsText({ seen: 0, kills: 0, visits: 0 }), '아직 기록 없음 — 곧 날아가요');
+  assert.equal(B.statsText(null), '아직 기록 없음 — 곧 날아가요');
+});
+
+test('[칸 추가] canTopup: 붙어 있는 광고만', () => {
+  assert.equal(B.canTopup('active'), true);
+  for (const s of ['awaiting_deposit', 'pending_review', 'hidden', 'refund_required', 'expired']) assert.equal(B.canTopup(s), false);
+});
+
+test('[도전장] readChallengeId: 10자리 영숫자만', () => {
+  assert.equal(B.readChallengeId('?challenge=0123abcdef'), '0123abcdef');
+  assert.equal(B.readChallengeId('?challenge=<b>'), null);
+  assert.equal(B.readChallengeId('?snipe=abc'), null);
+  assert.equal(B.buildChallengeUrl('https://x.kr', '0123abcdef'), 'https://x.kr/?challenge=0123abcdef');
+});

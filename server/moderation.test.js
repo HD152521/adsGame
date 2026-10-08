@@ -28,7 +28,7 @@ test('validateName: 욕설은 띄어쓰기·특수문자로 우회해도 거부'
 
 test('validateName: 제어문자 거부', () => {
   assert.ok(M.validateName('abc\u0000').error);
-  assert.ok(M.validateName('a‮b').error, 'RTL override');
+  assert.ok(M.validateName('a\u202Eb').error, 'RTL override');
 });
 
 test('decodeImage: PNG data URL → buffer·mime·ext', () => {
@@ -86,4 +86,8 @@ test('reviewAllClassifier: 이동 주소가 있는 광고는 텍스트라도 관
   const c = M.reviewAllClassifier();
   assert.equal(await c.classify({ image: null, landingUrl: 'https://a.kr/' }), 'review');
   assert.equal(await c.classify({ image: null, landingUrl: null }), 'approve');
+});
+
+test('validateName: 깨진 글자(인코딩 오류로 생긴 U+FFFD)가 섞이면 거부', () => {
+  assert.ok(M.validateName('�μ�').error);
 });

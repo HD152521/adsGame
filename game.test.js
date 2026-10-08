@@ -110,7 +110,7 @@ test('동시 발사체 수는 MAX_PROJECTILES를 넘지 않는다', () => {
     s = G.step({ ...s, dead: false }, evasiveBot(s), G.FIXED_DT, rng, () => 'A', { invincible: true });
     peak = Math.max(peak, s.projectiles.length);
   }
-  assert.ok(peak <= G.maxProjectilesAt(90), `peak=${peak}`);
+  assert.ok(peak <= G.MAX_PROJECTILES_CAP, `peak=${peak}`);
   assert.ok(peak > 5, '발사체가 충분히 쌓여야 한다');
 });
 
@@ -232,4 +232,78 @@ test('[추적] 옆으로 피하는 봇은 여전히 가만히 있는 것보다 �
   const idle = Array.from({ length: 20 }, (_, i) => run({ seed: 300 + i, bot: idleBot }).t);
   const evasive = Array.from({ length: 20 }, (_, i) => run({ seed: 300 + i, bot: evasiveBot }).t);
   assert.ok(median(evasive) >= median(idle) * 2, `idle=${median(idle).toFixed(2)} evasive=${median(evasive).toFixed(2)}`);
+});
+
+// ── 고도화: 등장 기록 · 아슬아슬 · 전단 살포 웨이브 ─────────────────
+const quiet = { invincible: true, noHoming: true };
+
+test('[성과] seen: 광고가 나올 때마다 광고주별 등장 횟수가 쌓인다', () => {
+  const rng = createRng(5);
+  let s = G.createGame();
+  for (let i = 0; i < Math.round(10 / G.FIXED_DT); i += 1) s = G.step(s, null, G.FIXED_DT, rng, () => 'A', quiet);
+  assert.ok(s.seen.A > 5, `seen=${s.seen.A}`);
+});
+
+function passingState(offset) {
+  const g = G.createGame();
+  const reach = G.PLAYER_RADIUS + G.PROJECTILE_RADIUS * G.HITBOX_FORGIVENESS;
+  // 플레이어(180,320) 왼쪽 위에서 오른쪽으로 지나가는 광고 — 최근접 거리 = reach + offset
+  return { ...g, spawnTimer: 999, projectiles: [{ id: 1, advId: 'A', x: 60, y: 320 - (reach + offset), vx: 300, vy: 0, r: G.PROJECTILE_RADIUS }] };
+}
+
+test('[아슬아슬] 몸을 스치듯 지나가면 nearMisses +1 (한 광고당 한 번)', () => {
+  let s = passingState(6);
+  for (let i = 0; i < 90; i += 1) s = G.step(s, null, G.FIXED_DT, createRng(1), () => null, { noHoming: true });
+  assert.equal(s.dead, false);
+  assert.equal(s.nearMisses, 1);
+  assert.ok(s.fx.length >= 0);
+});
+
+test('[아슬아슬] 멀찍이 지나가면 세지 않는다', () => {
+  let s = passingState(G.NEAR_MISS_MARGIN + 10);
+  for (let i = 0; i < 90; i += 1) s = G.step(s, null, G.FIXED_DT, createRng(1), () => null, { noHoming: true });
+  assert.equal(s.nearMisses, 0);
+});
+
+test('[아슬아슬] "휙!" 효과는 잠깐만 남는다', () => {
+  let s = passingState(6);
+  let sawFx = false;
+  for (let i = 0; i < 200; i += 1) {
+    s = G.step(s, null, G.FIXED_DT, createRng(1), () => null, { noHoming: true });
+    if (s.fx.some((f) => f.kind === 'whoosh')) sawFx = true;
+  }
+  assert.ok(sawFx);
+  assert.equal(s.fx.filter((f) => f.kind === 'whoosh').length, 0, '시간이 지나면 사라짐');
+});
+
+test('[웨이브] 첫 전단 살포 직전에 경고, 그 순간 한꺼번에 여러 장', () => {
+  const rng = createRng(9);
+  let s = G.createGame();
+  let warned = false;
+  let before = 0;
+  while (s.t < G.WAVE_FIRST_AT - 0.05) {
+    s = G.step(s, null, G.FIXED_DT, rng, () => 'A', quiet);
+    if (s.waveWarning) warned = true;
+    before = s.projectiles.length;
+  }
+  assert.ok(warned, '살포 전에 경고');
+  assert.equal(s.waves, 0);
+  while (s.t < G.WAVE_FIRST_AT + 0.05) s = G.step(s, null, G.FIXED_DT, rng, () => 'A', quiet);
+  assert.equal(s.waves, 1);
+  assert.ok(s.projectiles.length - before >= G.WAVE_BASE_COUNT - 1, `burst=${s.projectiles.length - before}`);
+});
+
+test('[웨이브] 회차가 갈수록 장수가 늘지만 상한이 있다', () => {
+  assert.ok(G.waveCount(3) > G.waveCount(0));
+  assert.equal(G.waveCount(999), G.WAVE_MAX_COUNT);
+});
+
+test('[웨이브] 판정은 결정론 — 같은 시드면 같은 결과', () => {
+  const runTo = () => {
+    const rng = createRng(4);
+    let s = G.createGame();
+    while (s.t < 35) s = G.step(s, null, G.FIXED_DT, rng, () => 'A', quiet);
+    return s.projectiles.map((p) => [p.x.toFixed(3), p.y.toFixed(3)]);
+  };
+  assert.deepEqual(runTo(), runTo());
 });

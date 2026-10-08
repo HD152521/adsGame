@@ -237,3 +237,101 @@ test('[이동 주소] 기본 검수(review-all)에서는 텍스트 광고도 이
   const order = await service.createOrder({ kind: 'snipe', name: '민수', slots: 1, landingUrl: 'https://minsu.example', consents: CONSENTS });
   assert.equal(order.review, true);
 });
+
+// ── 고도화: 판 기록·백분위 / 도전장 / 광고 성과 / 칸 추가 ─────────────────
+test('[백분위] recordRun: 오늘 판들 중 나보다 짧게 버틴 비율', async () => {
+  const { service } = setup();
+  assert.equal(service.recordRun({ seconds: 5 }).betterThan, null, '첫 판은 비교 대상 없음');
+  service.recordRun({ seconds: 10 });
+  service.recordRun({ seconds: 20 });
+  const r = service.recordRun({ seconds: 15 });
+  assert.equal(r.total, 4);
+  assert.equal(r.betterThan, 2 / 3, '5초·10초보다 김, 20초보다 짧음');
+});
+
+test('[백분위] 비정상 기록(음수·NaN·10분 초과)은 범위로 자르거나 거부', () => {
+  const { service } = setup();
+  assert.throws(() => service.recordRun({ seconds: 'x' }), /기록/);
+  assert.throws(() => service.recordRun({ seconds: -1 }), /기록/);
+  assert.doesNotThrow(() => service.recordRun({ seconds: 99999 }));
+});
+
+test('[성과] recordRun: 장부에 있는 광고만 등장·킬·사이트 이동을 쌓고 주문 조회에 보인다', async () => {
+  const { service } = setup({ classifier: M.autoApproveClassifier() });
+  const order = await service.createOrder({ kind: 'snipe', name: '민수', slots: 1, landingUrl: 'https://minsu.example', consents: CONSENTS });
+  service.confirmDeposit({ orderId: order.orderId, status: 'DONE', amount: 1000 });
+  const id = order.advertiserId;
+  service.recordRun({ seconds: 3, killerId: id, seen: { [id]: 7, nope: 99 }, redirected: true });
+  service.recordRun({ seconds: 4, killerId: id, seen: { [id]: 3 } });
+  const view = service.getOrder(order.orderId);
+  assert.deepEqual(view.stats, { seen: 10, kills: 2, visits: 1 });
+  assert.equal(service.getKillRanking()[0].kills, 2, '킬 순위에도 반영');
+});
+
+test('[성과] 한 판에서 보고하는 등장 수는 상한으로 자른다(조작 방지)', async () => {
+  const { service } = setup();
+  const order = await paidSnipe(service, '민수', 1);
+  service.recordRun({ seconds: 3, seen: { [order.advertiserId]: 1e9 } });
+  assert.ok(service.getOrder(order.orderId).stats.seen <= 500);
+});
+
+test('[도전장] 이름 필터를 거쳐 만들고, id로 다시 읽는다', () => {
+  const { service } = setup();
+  const c = service.createChallenge({ name: '민수', seconds: 18.24 });
+  assert.match(c.id, /^[a-f0-9]{10}$/);
+  assert.deepEqual(service.getChallenge(c.id), { id: c.id, name: '민수', seconds: 18.2 });
+  assert.equal(service.getChallenge('nope'), null);
+  assert.throws(() => service.createChallenge({ name: '시발', seconds: 3 }), /사용할 수 없는/);
+  assert.throws(() => service.createChallenge({ name: '민수', seconds: -3 }), /기록/);
+});
+
+test('[칸 추가] 붙어 있는 내 광고에 칸을 더하면 같은 광고의 지분이 커진다', async () => {
+  const { service } = setup();
+  const order = await paidSnipe(service, '민수', 2);
+  await paidSnipe(service, '영희', 2);
+  const topup = service.createTopup(order.orderId, { slots: 6, consents: CONSENTS });
+  assert.equal(topup.amount, 6000);
+  assert.equal(topup.advertiserId, order.advertiserId);
+  assert.equal(topup.review, false, '이미 검수된 광고라 다시 검수하지 않음');
+  service.confirmDeposit({ orderId: topup.orderId, status: 'DONE', amount: 6000 });
+  const ad = service.getLedger().advertisers.find((a) => a.id === order.advertiserId);
+  assert.equal(ad.slots, 8);
+  assert.equal(ad.share, 0.8);
+});
+
+test('[칸 추가] 붙어 있지 않은(검수 대기·가려짐) 광고나 없는 주문엔 못 더한다', async () => {
+  const { service } = setup();
+  const pending = await service.createOrder({ kind: 'logo', name: '치킨', slots: 1, image: PNG_1PX, consents: CONSENTS });
+  assert.throws(() => service.createTopup(pending.orderId, { slots: 1, consents: CONSENTS }), /붙어 있는/);
+  assert.throws(() => service.createTopup('nope', { slots: 1, consents: CONSENTS }), /주문/);
+});
+
+test('[칸 추가] 신고로 가리면 원래 칸과 추가 칸이 함께 가려지고, 복구도 함께', async () => {
+  const { service } = setup();
+  const order = await paidSnipe(service, '민수', 2);
+  const topup = service.createTopup(order.orderId, { slots: 3, consents: CONSENTS });
+  service.confirmDeposit({ orderId: topup.orderId, status: 'DONE', amount: 3000 });
+  service.report({ advId: order.advertiserId, reason: 'rights', reporter: 'x' });
+  assert.equal(service.getLedger().soldSlots, 0);
+  service.adminAction(order.advertiserId, 'restore');
+  assert.equal(service.getLedger().soldSlots, 5);
+});
+
+test('[칸 추가] 관리자가 광고를 거절하면 이미 결제한 추가 칸까지 전부 환불 대상', async () => {
+  const { service } = setup();
+  const order = await paidSnipe(service, '민수', 2);
+  const topup = service.createTopup(order.orderId, { slots: 3, consents: CONSENTS });
+  service.confirmDeposit({ orderId: topup.orderId, status: 'DONE', amount: 3000 });
+  service.adminAction(order.advertiserId, 'reject');
+  assert.equal(service.getOrder(order.orderId).status, ORDER_STATUS.REFUND_REQUIRED);
+  assert.equal(service.getOrder(topup.orderId).status, ORDER_STATUS.REFUND_REQUIRED);
+  assert.equal(service.getLedger().soldSlots, 0);
+});
+
+test('[도전장] 상한을 넘으면 가장 오래된 것부터 지운다', () => {
+  const { service } = setup();
+  const { MAX_CHALLENGES } = require('./stats.js');
+  const first = service.createChallenge({ name: '처음', seconds: 1 });
+  for (let i = 0; i < MAX_CHALLENGES; i += 1) service.createChallenge({ name: '민수', seconds: 2 });
+  assert.equal(service.getChallenge(first.id), null);
+});

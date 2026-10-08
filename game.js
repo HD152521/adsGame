@@ -38,6 +38,20 @@ const HOMING_MAX = 0.85;    // rad/s ≈ 49°/s — 아무리 늦게 가도 이 
 const HOMING_RAMP_SECONDS = 90;
 const BOSS_SIZE_MULTIPLIER = 1.6; // 지분 1위 광고주(shares.js findBossId) — 공개 규칙
 const BOSS_SPEED_MULTIPLIER = 1.25;
+// ── 아슬아슬: 판정 거리 + 이 여유 안쪽으로 스치고 지나가면 "휙!" ──
+const NEAR_MISS_MARGIN = 18;
+const FX_SECONDS = 0.7; // "휙!" 같은 효과가 화면에 남는 시간
+
+// ── 전단 살포 웨이브: 30초마다 한쪽 가장자리에서 여러 장이 한꺼번에(직전에 경고) ──
+const WAVE_FIRST_AT = 30;
+const WAVE_EVERY = 30;
+const WAVE_WARNING_SECONDS = 1.5;
+const WAVE_BASE_COUNT = 6;
+const WAVE_STEP_COUNT = 2;
+const WAVE_MAX_COUNT = 14;
+const WAVE_SPEED_FACTOR = 0.85; // 웨이브는 조금 느리게 — 많은 대신 피할 틈을 준다
+const WAVE_ANGLE_JITTER = 0.12;
+
 const SPAWN_MARGIN = 30;
 const DESPAWN_MARGIN = 60;
 
@@ -95,7 +109,17 @@ function createGame() {
     dead: false,
     killerId: null,
     dodged: {},
+    seen: {},          // 광고주별 등장 횟수(광고 성과 보기용 참고 기록)
+    nearMisses: 0,
+    fx: [],            // 짧게 보여줄 효과 [{ kind: 'whoosh', x, y, t }]
+    waves: 0,
+    nextWaveAt: WAVE_FIRST_AT,
+    waveWarning: false,
   };
+}
+
+function waveCount(index) {
+  return Math.min(WAVE_MAX_COUNT, WAVE_BASE_COUNT + WAVE_STEP_COUNT * index);
 }
 
 function clamp(v, lo, hi) {
@@ -161,54 +185,126 @@ function hits(player, p) {
   return dx * dx + dy * dy < reach * reach;
 }
 
-/**
- * 한 스텝 진행.
- * @param state 이전 상태(변경하지 않음)
- * @param target {x,y} | null — 플레이어가 향할 논리 좌표
- * @param pickAdId (rng) => advId | null — null이면 이번 스폰은 건너뛴다(판매 0칸)
- * @param opts { bossId?: string, invincible?: boolean(테스트 전용) }
- */
-function step(state, target, dt, rng, pickAdId, opts = {}) {
-  if (state.dead) return state;
-  const t = state.t + dt;
-  const player = movePlayer(state.player, target, dt);
-
+/** 정해진 간격마다 한 장 */
+function spawnRegular(state, ctx, dt) {
   let spawnTimer = state.spawnTimer - dt;
   let nextId = state.nextId;
   const spawned = [];
   if (spawnTimer <= 0) {
-    spawnTimer += spawnIntervalAt(t);
-    const advId = state.projectiles.length < maxProjectilesAt(t) ? pickAdId(rng) : null;
+    spawnTimer += spawnIntervalAt(ctx.t);
+    const advId = state.projectiles.length < maxProjectilesAt(ctx.t) ? ctx.pickAdId(ctx.rng) : null;
     if (advId !== null && advId !== undefined) {
-      spawned.push(spawnProjectile({ ...state, t, player, nextId }, rng, advId, advId === opts.bossId));
+      spawned.push(spawnProjectile({ ...state, t: ctx.t, player: ctx.player, nextId }, ctx.rng, advId, advId === ctx.opts.bossId));
       nextId += 1;
     }
   }
+  return { spawnTimer, nextId, spawned };
+}
 
-  const dodged = { ...state.dodged };
+/** 웨이브 한 장의 시작점·방향: side 0=위 1=오른쪽 2=아래 3=왼쪽, frac=가장자리 위 위치(0~1) */
+function waveOrigin(side, frac) {
+  const along = (len) => frac * len;
+  if (side === 0) return { x: along(WORLD_WIDTH), y: -SPAWN_MARGIN, dir: Math.PI / 2 };
+  if (side === 1) return { x: WORLD_WIDTH + SPAWN_MARGIN, y: along(WORLD_HEIGHT), dir: Math.PI };
+  if (side === 2) return { x: along(WORLD_WIDTH), y: WORLD_HEIGHT + SPAWN_MARGIN, dir: -Math.PI / 2 };
+  return { x: -SPAWN_MARGIN, y: along(WORLD_HEIGHT), dir: 0 };
+}
+
+/** 전단 살포: 한쪽 가장자리에서 가로질러 쏟아짐. 전체 상한(MAX_PROJECTILES_CAP)은 넘지 않는다 */
+function spawnWave(state, ctx, nextId, existing) {
+  if (ctx.t < state.nextWaveAt) return { spawned: [], nextId, waves: state.waves, nextWaveAt: state.nextWaveAt };
+  const n = Math.max(0, Math.min(waveCount(state.waves), MAX_PROJECTILES_CAP - existing));
+  const side = Math.floor(ctx.rng() * 4);
+  const speed = speedAt(ctx.t) * WAVE_SPEED_FACTOR;
+  const spawned = [];
+  let id = nextId;
+  for (let k = 0; k < n; k += 1) {
+    const frac = clamp((k + 0.5) / n + (ctx.rng() - 0.5) * (0.6 / n), 0.02, 0.98);
+    const o = waveOrigin(side, frac);
+    const dir = o.dir + (ctx.rng() * 2 - 1) * WAVE_ANGLE_JITTER;
+    const advId = ctx.pickAdId(ctx.rng);
+    if (advId === null || advId === undefined) continue;
+    const isBoss = advId === ctx.opts.bossId;
+    spawned.push({
+      id, advId, boss: isBoss, x: o.x, y: o.y,
+      vx: Math.cos(dir) * speed, vy: Math.sin(dir) * speed,
+      r: PROJECTILE_RADIUS * (isBoss ? BOSS_SIZE_MULTIPLIER : 1),
+    });
+    id += 1;
+  }
+  return { spawned, nextId: id, waves: state.waves + 1, nextWaveAt: state.nextWaveAt + WAVE_EVERY };
+}
+
+/** 이동·충돌·피함·아슬아슬 판정 */
+function moveProjectiles(list, ctx, dt, prev) {
+  const dodged = { ...prev.dodged };
   const projectiles = [];
+  const fx = [];
   let killerId = null;
-  const homing = homingAt(t);
-  for (const p of [...state.projectiles, ...spawned]) {
-    const steered = steer(p, player, dt, homing);
+  let nearMisses = prev.nearMisses;
+  const homing = ctx.opts.noHoming ? 0 : homingAt(ctx.t);
+  for (const p of list) {
+    const steered = homing > 0 ? steer(p, ctx.player, dt, homing) : p;
     const moved = { ...steered, x: steered.x + steered.vx * dt, y: steered.y + steered.vy * dt };
     if (isGone(moved)) {
       dodged[moved.advId] = (dodged[moved.advId] || 0) + 1;
       continue;
     }
-    if (killerId === null && !opts.invincible && hits(player, moved)) killerId = moved.advId;
-    projectiles.push(moved);
+    if (killerId === null && !ctx.opts.invincible && hits(ctx.player, moved)) killerId = moved.advId;
+    const dx = ctx.player.x - moved.x;
+    const dy = ctx.player.y - moved.y;
+    const closest = Math.min(p.closest ?? Infinity, Math.hypot(dx, dy));
+    const reach = PLAYER_RADIUS + moved.r * HITBOX_FORGIVENESS;
+    const passed = dx * moved.vx + dy * moved.vy < 0;
+    const near = !moved.nearMissed && passed && closest < reach + NEAR_MISS_MARGIN;
+    if (near) {
+      nearMisses += 1;
+      fx.push({ kind: 'whoosh', x: ctx.player.x, y: ctx.player.y, t: ctx.t });
+    }
+    projectiles.push({ ...moved, closest, nearMissed: moved.nearMissed || near });
   }
+  return { projectiles, killerId, dodged, nearMisses, fx };
+}
 
+function countSeen(seen, spawned) {
+  if (spawned.length === 0) return seen;
+  const next = { ...seen };
+  for (const p of spawned) next[p.advId] = (next[p.advId] || 0) + 1;
+  return next;
+}
+
+/**
+ * 한 스텝 진행.
+ * @param state 이전 상태(변경하지 않음)
+ * @param target {x,y} | null — 플레이어가 향할 논리 좌표
+ * @param pickAdId (rng) => advId | null — null이면 이번 스폰은 건너뛴다(판매 0칸)
+ * @param opts { bossId?: string, invincible?, noHoming?: boolean(테스트 전용) }
+ */
+function step(state, target, dt, rng, pickAdId, opts = {}) {
+  if (state.dead) return state;
+  const t = state.t + dt;
+  const player = movePlayer(state.player, target, dt);
+  const ctx = { t, player, rng, pickAdId, opts };
+  const regular = spawnRegular(state, ctx, dt);
+  const wave = spawnWave(state, ctx, regular.nextId, state.projectiles.length + regular.spawned.length);
+  const spawned = [...regular.spawned, ...wave.spawned];
+  const moved = moveProjectiles([...state.projectiles, ...spawned], ctx, dt, state);
+  const fx = [...state.fx.filter((f) => t - f.t < FX_SECONDS), ...moved.fx];
   return {
     t,
-    spawnTimer,
+    spawnTimer: regular.spawnTimer,
     player,
-    projectiles,
-    nextId,
-    dead: killerId !== null,
-    killerId,
-    dodged,
+    projectiles: moved.projectiles,
+    nextId: wave.nextId,
+    dead: moved.killerId !== null,
+    killerId: moved.killerId,
+    dodged: moved.dodged,
+    seen: countSeen(state.seen, spawned),
+    nearMisses: moved.nearMisses,
+    fx,
+    waves: wave.waves,
+    nextWaveAt: wave.nextWaveAt,
+    waveWarning: t >= wave.nextWaveAt - WAVE_WARNING_SECONDS && t < wave.nextWaveAt,
   };
 }
 
@@ -235,6 +331,12 @@ if (typeof module !== 'undefined') {
     BOSS_SIZE_MULTIPLIER,
     MAX_PROJECTILES,
     MAX_PROJECTILES_CAP,
+    HITBOX_FORGIVENESS,
+    NEAR_MISS_MARGIN,
+    WAVE_FIRST_AT,
+    WAVE_BASE_COUNT,
+    WAVE_MAX_COUNT,
+    waveCount,
     SPAWN_INTERVAL_MIN,
     SPAWN_INTERVAL_FLOOR,
     SPEED_MAX,

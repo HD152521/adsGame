@@ -170,3 +170,12 @@ test('[이동 주소] redirectTarget: 죽인 광고의 http(s) 주소만, 없거
   assert.equal(redirectTarget('C', ledger), null, '서버가 걸러도 클라이언트에서 한 번 더');
   assert.equal(redirectTarget('ZZ', ledger), null);
 });
+
+test('[고도화] drawFrame: 아슬아슬하면 "휙!", 웨이브 직전엔 "전단 살포 주의!"', () => {
+  const calls = [];
+  const state = { ...G.createGame(), t: 10, fx: [{ kind: 'whoosh', x: 100, y: 100, t: 9.9 }], waveWarning: true };
+  drawFrame(recordingCtx(calls), state, { scale: 1, offsetX: 0, offsetY: 0, width: 360, height: 640 }, new Map());
+  const texts = calls.filter((c) => c.prop === 'fillText').map((c) => c.args[0]);
+  assert.ok(texts.includes('휙!'), texts.join(','));
+  assert.ok(texts.includes('전단 살포 주의!'), texts.join(','));
+});

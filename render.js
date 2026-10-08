@@ -184,10 +184,57 @@ function drawShreds(ctx, state, view) {
   ctx.restore();
 }
 
+const FX_LIFE = 0.7;
+
+/** 아슬아슬: 플레이어 옆에 빨간 매직 "휙!"이 떠올랐다 사라진다 */
+function drawWhoosh(ctx, f, state, view) {
+  const age = (state.t - f.t) / FX_LIFE;
+  if (age < 0 || age > 1) return;
+  const x = view.offsetX + f.x * view.scale + 22 * view.scale;
+  const y = view.offsetY + f.y * view.scale - (18 + age * 20) * view.scale;
+  ctx.save();
+  ctx.globalAlpha = 1 - age;
+  ctx.translate(x, y);
+  ctx.rotate(-0.15);
+  ctx.fillStyle = RENDER_DEPS.PAPER_COLORS.marker;
+  ctx.font = `${Math.round(26 * view.scale)}px ${RENDER_DEPS.PAPER_FONTS.hand}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('휙!', 0, 0);
+  ctx.restore();
+}
+
+/** 전단 살포 직전: 화면 위쪽에 테이프로 붙인 경고 쪽지 */
+function drawWaveWarning(ctx, state, view) {
+  const D = RENDER_DEPS;
+  const w = 210 * view.scale;
+  const h = 40 * view.scale;
+  const x = view.offsetX + (D.WORLD_WIDTH * view.scale - w) / 2;
+  const y = view.offsetY + 64 * view.scale;
+  const blink = Math.floor(state.t * 6) % 2 === 0;
+  ctx.save();
+  ctx.translate(x + w / 2, y + h / 2);
+  ctx.rotate(-0.03);
+  ctx.fillStyle = D.PAPER_COLORS.paper;
+  ctx.shadowColor = 'rgba(30, 18, 6, 0.4)';
+  ctx.shadowOffsetY = 3;
+  ctx.fillRect(-w / 2, -h / 2, w, h);
+  ctx.shadowColor = 'transparent';
+  ctx.fillStyle = blink ? D.PAPER_COLORS.marker : D.PAPER_COLORS.toner;
+  ctx.font = `${Math.round(22 * view.scale)}px ${D.PAPER_FONTS.display}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('전단 살포 주의!', 0, 1, w - 12);
+  ctx.restore();
+  D.drawTape(ctx, x + w / 2, y, 60 * view.scale, 0.04);
+}
+
 function drawFrame(ctx, state, view, logos) {
   drawField(ctx, view);
   for (const p of state.projectiles) drawProjectile(ctx, p, view, logos.get(p.advId), state.t);
   drawPlayer(ctx, state, view);
+  for (const f of state.fx || []) if (f.kind === 'whoosh') drawWhoosh(ctx, f, state, view);
+  if (state.waveWarning) drawWaveWarning(ctx, state, view);
   if (state.dead) drawShreds(ctx, state, view);
 }
 

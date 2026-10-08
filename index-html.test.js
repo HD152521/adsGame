@@ -10,7 +10,7 @@ const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map((m) => m[1]);
 
 test('스크립트는 의존 순서대로 로드된다(app.js가 마지막)', () => {
-  assert.deepEqual(scripts, ['rng.js', 'paper.js', 'shares.js', 'game.js', 'seed-ledger.js', 'render.js', 'input.js', 'deathcard.js', 'api.js', 'buy.js', 'app.js']);
+  assert.deepEqual(scripts, ['rng.js', 'paper.js', 'shares.js', 'game.js', 'seed-ledger.js', 'render.js', 'input.js', 'deathcard.js', 'sound.js', 'api.js', 'buy.js', 'app.js']);
 });
 
 test('외부(http/https/프로토콜 상대) 스크립트·스타일이 없다', () => {
@@ -19,7 +19,7 @@ test('외부(http/https/프로토콜 상대) 스크립트·스타일이 없다',
 });
 
 test('필수 화면 요소가 있다', () => {
-  for (const id of ['screen-start', 'screen-dead', 'screen-buy', 'game-canvas', 'btn-play', 'btn-retry', 'btn-share', 'btn-home', 'btn-buy', 'btn-buy-dead', 'board-sold', 'board-list', 'rule-snipe', 'hud-time', 'hud-top', 'card-preview', 'live-banner', 'snipe-banner', 'snipe-name', 'kills', 'kills-list', 'report', 'report-status', 'share-status', 'buy-form', 'buy-step-form', 'buy-step-pay', 'buy-logo-field', 'buy-logo-preview', 'buy-amount', 'buy-share', 'buy-errors', 'buy-resume', 'btn-buy-submit', 'board-tabs', 'offline-note', 'pay-stamp', 'btn-buy-close', 'pay-status', 'pay-account-box', 'pay-bank', 'pay-account', 'pay-holder', 'pay-amount', 'pay-due', 'btn-dev-deposit', 'pay-snipe', 'pay-snipe-url', 'btn-copy-snipe']) {
+  for (const id of ['screen-start', 'screen-dead', 'screen-buy', 'game-canvas', 'btn-play', 'btn-retry', 'btn-share', 'btn-home', 'btn-buy', 'btn-buy-dead', 'board-sold', 'board-list', 'rule-snipe', 'hud-time', 'hud-top', 'card-preview', 'live-banner', 'snipe-banner', 'snipe-name', 'kills', 'kills-list', 'report', 'report-status', 'share-status', 'buy-form', 'buy-step-form', 'buy-step-pay', 'buy-logo-field', 'buy-logo-preview', 'buy-amount', 'buy-share', 'buy-errors', 'buy-resume', 'btn-buy-submit', 'board-tabs', 'offline-note', 'pay-stamp', 'btn-sound', 'hud-target', 'challenge-banner', 'challenge-from', 'challenge-seconds', 'challenge-box', 'challenge-make', 'challenge-made', 'challenge-name', 'btn-challenge-make', 'challenge-url', 'btn-challenge-share', 'challenge-status', 'pay-stats', 'pay-stats-text', 'pay-topup', 'topup-slots', 'topup-consent', 'btn-topup', 'btn-buy-close', 'pay-status', 'pay-account-box', 'pay-bank', 'pay-account', 'pay-holder', 'pay-amount', 'pay-due', 'btn-dev-deposit', 'pay-snipe', 'pay-snipe-url', 'btn-copy-snipe']) {
     assert.match(html, new RegExp(`id="${id}"`), id);
   }
 });

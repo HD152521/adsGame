@@ -19,6 +19,7 @@ const BOARD_ROWS = 6;
 const TAB_NAMES = 3; // 시작 전단 아래 뜯는 탭에 적는 광고 이름 수(마지막 탭은 "내 광고 붙이기")
 const DEATH_PAUSE_MS = 450; // 맞은 순간 종이 조각이 흩어지는 걸 보여주고 나서 분실 공고로
 const FONT_WAIT_MS = 1500;  // 캔버스 손글씨가 대체 글꼴로 굳지 않게 기다리는 상한
+const CHALLENGE_NAME_KEY = 'ad-dodge:challenge-name';
 const CANVAS_FONTS = ["34px 'Nanum Pen Script'", "150px 'Black Han Sans'", "700 76px 'Nanum Gothic Coding'"];
 const REPORT_MESSAGES = {
   rights: '접수! 권리 침해는 바로 떼어 냈어요',
@@ -226,8 +227,8 @@ function createWorldStore({ doc, server, snipeId, onApply }) {
   return { get: () => world, apply, refresh };
 }
 
-/** 게임 세션 — 고정 타임스텝 루프. 판정은 game.js */
-function createSession({ doc, surface, input, screens, getWorld, onDeath }) {
+/** 게임 세션 — 고정 타임스텝 루프. 판정은 game.js, 이번 프레임에 일어난 사건은 onEvents로(소리) */
+function createSession({ doc, surface, input, screens, getWorld, onDeath, onEvents }) {
   let game = createGame();
   let rng = createRng(newSeed());
   let lastTime = null;
@@ -239,10 +240,12 @@ function createSession({ doc, surface, input, screens, getWorld, onDeath }) {
       const dt = lastTime === null ? 0 : Math.min((now - lastTime) / 1000, MAX_FRAME_SECONDS);
       acc += dt;
       const world = getWorld();
+      const before = game;
       while (acc >= FIXED_DT && !game.dead) {
         game = step(game, input.target(), FIXED_DT, rng, world.pickAdId, { bossId: world.bossId });
         acc -= FIXED_DT;
       }
+      if (game !== before) onEvents(gameEvents(before, game));
       doc.getElementById('hud-time').textContent = game.t.toFixed(1);
       if (game.dead && !deathTimer) {
         const fallen = game;
@@ -276,11 +279,94 @@ function createSession({ doc, surface, input, screens, getWorld, onDeath }) {
   };
 }
 
-/** 사망 화면 — 카드·공유·신고 */
-function createDeathScreen({ doc, server, snipeId, getWorld }) {
+function safeStorage() {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** 도전장 만들기(사망 화면) — 이름은 기기에 기억, 링크는 공유 시트 또는 복사 */
+function createChallengeBox({ doc, server }) {
   const $ = (id) => doc.getElementById(id);
+  const storage = safeStorage();
+  let seconds = 0;
+  try {
+    $('challenge-name').value = (storage && storage.getItem(CHALLENGE_NAME_KEY)) || '';
+  } catch {
+    /* 저장소 막힘 — 빈 칸으로 */
+  }
+  $('btn-challenge-make').addEventListener('click', async () => {
+    const button = $('btn-challenge-make');
+    const name = $('challenge-name').value.trim();
+    if (!name) {
+      $('challenge-status').textContent = '도전장에 적을 이름을 써 주세요';
+      return;
+    }
+    button.disabled = true;
+    try {
+      const c = await api.createChallenge(name, seconds);
+      try {
+        if (storage) storage.setItem(CHALLENGE_NAME_KEY, name);
+      } catch {
+        /* 무시 */
+      }
+      $('challenge-url').value = buildChallengeUrl(location.origin, c.id);
+      $('challenge-make').hidden = true;
+      $('challenge-made').hidden = false;
+      $('challenge-status').textContent = `${c.name} ${c.seconds}초 — 넘어 보라고 보내세요`;
+    } catch (err) {
+      $('challenge-status').textContent = err.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $('btn-challenge-share').addEventListener('click', async () => {
+    const url = $('challenge-url').value;
+    const text = `${$('challenge-name').value.trim()} ${seconds.toFixed(1)}초 버팀. 넘어봐`;
+    try {
+      if (navigator.share) await navigator.share({ url, text });
+      else {
+        await navigator.clipboard.writeText(url);
+        $('challenge-status').textContent = '링크를 복사했어요!';
+      }
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      $('challenge-url').select();
+      $('challenge-status').textContent = '링크를 길게 눌러 복사해 주세요';
+    }
+  });
+  return {
+    reset(survivedSeconds) {
+      seconds = survivedSeconds;
+      $('challenge-box').hidden = !server.online;
+      $('challenge-make').hidden = false;
+      $('challenge-made').hidden = true;
+      $('challenge-status').textContent = '';
+    },
+  };
+}
+
+/** 사망 화면 — 기록 전송(백분위)·광고주 사이트 이동·카드·공유·신고·도전장 */
+function createDeathScreen({ doc, server, snipeId, getWorld, getChallenge }) {
+  const $ = (id) => doc.getElementById(id);
+  const challengeBox = createChallengeBox({ doc, server });
   let card = null;
   let killerId = null;
+  let round = 0;
+
+  const paint = (textInput, logo) => {
+    const text = buildDeathCardText(textInput);
+    try {
+      card = { ...buildCard(doc, text, logo), text };
+      $('card-preview').src = card.previewUrl;
+      $('card-preview').alt = `${text.headline}. ${text.survived}${text.rankLine ? `. ${text.rankLine}` : ''}`;
+    } catch (err) {
+      card = null;
+      $('share-status').textContent = friendlyError(err);
+    }
+  };
 
   $('btn-share').addEventListener('click', async () => {
     const button = $('btn-share');
@@ -311,36 +397,47 @@ function createDeathScreen({ doc, server, snipeId, getWorld }) {
   return {
     show(game) {
       const world = getWorld();
+      round += 1;
+      const myRound = round;
       killerId = game.killerId;
-      if (server.online) api.kill(killerId).catch(() => {});
+      const run = { seconds: game.t, killerId, seen: game.seen };
       // 광고에 맞으면 그 광고주 사이트로 즉시 이동(사용자 결정 — 공개 규칙으로 시작 화면·약관에 명시)
       const target = redirectTarget(killerId, world.ledger);
       if (target) {
+        if (server.online) api.runBeacon({ ...run, redirected: true });
         location.assign(target);
         return;
       }
-      const text = buildDeathCardText({ killerId, sniperId: snipeId, survivedSeconds: game.t, dodged: game.dodged, names: world.names });
       $('share-status').textContent = '';
       $('report-status').textContent = '';
       $('report').hidden = !server.online;
-      try {
-        card = { ...buildCard(doc, text, world.logos.get(killerId)), text };
-        $('card-preview').src = card.previewUrl;
-        $('card-preview').alt = `${text.headline}. ${text.survived}`;
-      } catch (err) {
-        card = null;
-        $('share-status').textContent = friendlyError(err);
-      }
+      challengeBox.reset(game.t);
+      const textInput = {
+        killerId, sniperId: snipeId, survivedSeconds: game.t, dodged: game.dodged, names: world.names,
+        nearMisses: game.nearMisses, challenge: getChallenge(),
+      };
+      const logo = world.logos.get(killerId);
+      paint(textInput, logo);
+      if (!server.online) return;
+      api
+        .run(run)
+        .then((percentile) => {
+          if (myRound === round) paint({ ...textInput, percentile }, logo); // 다음 판이 시작됐으면 버림
+        })
+        .catch((err) => console.warn('[ad-dodge] 기록 전송 실패', err.message));
     },
   };
 }
 
 /** 실시간 광고 전쟁 — purchase 배너, takedown 즉시 제거, 재연결·주기 재동기화(SSE는 유실분을 다시 안 보낸다) */
-function wireRealtime({ server, worldStore, session, banner }) {
+function wireRealtime({ server, worldStore, session, banner, sound }) {
   if (!server.online) return;
   api.subscribe({
     purchase: (data) => {
-      worldStore.refresh().then(() => banner(purchaseBannerText(data)));
+      worldStore.refresh().then(() => {
+        banner(purchaseBannerText(data));
+        sound.play('staple');
+      });
     },
     takedown: ({ advertiserId }) => {
       session.removeAdvertiser(advertiserId);
@@ -351,9 +448,25 @@ function wireRealtime({ server, worldStore, session, banner }) {
   setInterval(() => worldStore.refresh(), RESYNC_MS);
 }
 
-function wireButtons({ doc, screens, session, buyFlow, refreshKills }) {
+function wireSoundToggle(doc, sound) {
+  const button = doc.getElementById('btn-sound');
+  const paintButton = () => {
+    const on = !sound.isMuted();
+    button.textContent = on ? '소리 켬' : '소리 끔';
+    button.setAttribute('aria-pressed', String(on));
+  };
+  button.addEventListener('click', () => {
+    sound.unlock();
+    sound.setMuted(!sound.isMuted());
+    paintButton();
+  });
+  paintButton();
+}
+
+function wireButtons({ doc, screens, session, buyFlow, refreshKills, sound }) {
   const $ = (id) => doc.getElementById(id);
   const startRound = (event) => {
+    sound.unlock();
     session.reset();
     screens.go(event);
   };
@@ -372,6 +485,26 @@ function wireButtons({ doc, screens, session, buyFlow, refreshKills }) {
     });
   }
   if (!buyFlow) $('btn-buy').textContent = '게시판 공사 중';
+  wireSoundToggle(doc, sound);
+}
+
+/** 도전장 링크로 들어왔으면 시작 화면에 포스트잇 + HUD에 목표 기록 */
+function loadChallenge(doc, server, id) {
+  if (!id || !server.online) return Promise.resolve(null);
+  return api
+    .challenge(id)
+    .then((c) => {
+      doc.getElementById('challenge-from').textContent = c.name;
+      doc.getElementById('challenge-seconds').textContent = c.seconds.toFixed(1);
+      doc.getElementById('challenge-banner').hidden = false;
+      doc.getElementById('hud-target').textContent = `목표 ${c.seconds.toFixed(1)}초`;
+      doc.getElementById('hud-target').hidden = false;
+      return c;
+    })
+    .catch((err) => {
+      console.warn('[ad-dodge] 도전장을 못 읽었어요', err.message);
+      return null;
+    });
 }
 
 /** 캔버스(쪽지·분실 공고)는 그리는 순간의 글꼴로 굳으므로, 손글씨·제목 글꼴을 잠깐 기다린다 */
@@ -387,6 +520,11 @@ async function bootApp() {
   const snipeId = readSnipeId(location.search);
   const [server] = await Promise.all([loadServerState(), waitForFonts(doc)]);
   $('offline-note').hidden = server.online;
+  const sound = createSound(safeStorage());
+  let challenge = null;
+  loadChallenge(doc, server, readChallengeId(location.search)).then((c) => {
+    challenge = c;
+  });
 
   const surface = setupCanvas($('game-canvas'));
   let session = null;
@@ -399,13 +537,14 @@ async function bootApp() {
     // 재동기화로 장부에서 빠진 광고(유실된 takedown)는 날아가던 것도 지운다
     onApply: (world) => session && session.keepOnly(new Set(world.ledger.advertisers.map((a) => a.id))),
   });
-  const death = createDeathScreen({ doc, server, snipeId, getWorld: worldStore.get });
+  const death = createDeathScreen({ doc, server, snipeId, getWorld: worldStore.get, getChallenge: () => challenge });
   session = createSession({
     doc,
     surface,
     input,
     screens,
     getWorld: worldStore.get,
+    onEvents: (events) => events.forEach((e) => sound.play(e)),
     onDeath: (game) => {
       screens.go('die');
       death.show(game);
@@ -413,11 +552,21 @@ async function bootApp() {
   });
   const refreshKills = () => (server.online ? api.killRanking().then((r) => renderKillRanking(doc, r)).catch(() => {}) : Promise.resolve());
   const buyFlow = server.online
-    ? createBuyFlow({ doc, api, getLedger: () => worldStore.get().ledger, config: server.config, onClose: () => { screens.go('close'); worldStore.refresh(); } })
+    ? createBuyFlow({
+      doc,
+      api,
+      getLedger: () => worldStore.get().ledger,
+      config: server.config,
+      onPosted: () => sound.play('staple'),
+      onClose: () => {
+        screens.go('close');
+        worldStore.refresh();
+      },
+    })
     : null;
 
-  wireButtons({ doc, screens, session, buyFlow, refreshKills });
-  wireRealtime({ server, worldStore, session, banner: createBanner($('live-banner')) });
+  wireButtons({ doc, screens, session, buyFlow, refreshKills, sound });
+  wireRealtime({ server, worldStore, session, banner: createBanner($('live-banner')), sound });
   worldStore.apply(server.ledger);
   refreshKills();
   screens.show('start');

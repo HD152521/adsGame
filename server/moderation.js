@@ -10,7 +10,7 @@
 const NAME_MAX = 16;
 const MAX_IMAGE_BYTES = 512 * 1024;
 
-const CONTROL_CHARS = /[\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]/;
+const CONTROL_CHARS = /[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufffd]/; // 제어문자·방향 바꿈·폭 없는 문자, \ufffd = 인코딩이 깨진 글자
 const URL_LIKE = /(https?:\/\/|www\.|\.(com|kr|net|io|co|me|org|xyz|shop|link)\b)/i;
 const PHONE_LIKE = /0\d{8,}/;
 // 최소 목록 — 띄어쓰기·특수문자 우회는 normalizeForFilter가 막는다. 운영 중 신고로 보강한다.

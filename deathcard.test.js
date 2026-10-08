@@ -82,3 +82,38 @@ test('[게시판] dodgedTotal: 피한 광고 총 장수(분실 공고에 표시)
   const t = buildDeathCardText({ killerId: 'A', survivedSeconds: 3, dodged: { A: 3, B: 7, C: 0 }, names: { A: 'a', B: 'b', C: 'c' } });
   assert.equal(t.dodgedTotal, 10);
 });
+
+// ── 고도화: 백분위 · 도전 결과 · 아슬아슬 ──────────────────────────
+const { formatTopPercent, challengeResult } = require('./deathcard.js');
+
+test('formatTopPercent: 나보다 짧게 버틴 비율 → "상위 N%"(최소 1%), 비교 대상 없으면 null', () => {
+  assert.equal(formatTopPercent(0.88), '상위 12%');
+  assert.equal(formatTopPercent(0.999), '상위 1%');
+  assert.equal(formatTopPercent(0), '상위 100%');
+  assert.equal(formatTopPercent(null), null);
+});
+
+test('challengeResult: 도전 기록을 넘으면 격파, 못 넘으면 패배', () => {
+  assert.deepEqual(challengeResult({ name: '민수', seconds: 18.2 }, 19), { won: true, text: '민수 격파! (18.2초 넘김)' });
+  assert.deepEqual(challengeResult({ name: '민수', seconds: 18.2 }, 12.4), { won: false, text: '민수에게 졌다 (18.2초)' });
+  assert.equal(challengeResult(null, 3), null);
+});
+
+test('buildDeathCardText: 아슬아슬 횟수·백분위·도전 결과가 문구에 들어간다', () => {
+  const t = buildDeathCardText({
+    killerId: 'A', survivedSeconds: 19, dodged: {}, names: { A: '동네치킨' },
+    nearMisses: 4, percentile: { betterThan: 0.88, total: 120 }, challenge: { name: '민수', seconds: 18.2 },
+  });
+  assert.equal(t.nearMisses, 4);
+  assert.equal(t.rankLine, '오늘 120판 중 상위 12%');
+  assert.equal(t.challenge.won, true);
+  assert.match(t.shareText, /상위 12%/);
+  assert.match(t.shareText, /민수 격파/);
+});
+
+test('buildDeathCardText: 오늘 첫 판이면 "오늘 첫 기록"', () => {
+  const t = buildDeathCardText({ killerId: 'A', survivedSeconds: 3, dodged: {}, names: {}, percentile: { betterThan: null, total: 1 } });
+  assert.equal(t.rankLine, '오늘 첫 기록');
+  const none = buildDeathCardText({ killerId: 'A', survivedSeconds: 3, dodged: {}, names: {} });
+  assert.equal(none.rankLine, null, '집계 전(서버 응답 전·오프라인)');
+});
