@@ -294,18 +294,34 @@ body[data-screen='start'] .hud, body[data-screen='buying'] .hud { visibility: hi
 .admin__item img { border: 1.5px solid var(--toner); object-fit: cover; }
 .admin__item b { font-family: var(--display); font-weight: 400; letter-spacing: var(--track-display); }
 .admin__item small { color: var(--toner-soft); }
-.admin__item > div:last-child { flex-basis: 100%; display: flex; gap: 6px; flex-wrap: wrap; }
+.admin__actions { flex-basis: 100%; display: flex; gap: 6px; flex-wrap: wrap; }
 .admin__url { color: var(--marker); font-family: var(--type); font-size: 12px; word-break: break-all; }
+.admin__edit { flex-basis: 100%; display: grid; gap: 10px; padding: 12px; background: var(--paper-shade); border: 1.5px dashed var(--toner-soft); }
+.admin__edit label { display: grid; gap: 4px; font-size: 12px; color: var(--toner-soft); }
+.admin__edit input[type='text'], .admin__edit input[type='url'] {
+  border: 0; border-bottom: 1.5px solid var(--toner); background: transparent; font-family: var(--hand); font-size: 22px; color: var(--pen); padding: 0 2px;
+}
+.admin__edit input:focus { outline: none; border-bottom-color: var(--pen); }
+.admin__edit-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.admin__edit-error { margin: 0; color: var(--marker); font-size: 13px; min-height: 1.2em; }
 .btn { font: inherit; cursor: pointer; }
 .btn--primary { background: var(--toner); color: var(--paper); border: 0; padding: 8px 16px; font-family: var(--display); letter-spacing: var(--track-display); }
 
 /* ── 고도화: 소리 버튼 · 목표 기록 · 도전장 · 광고 성과 · 칸 추가 ───────────────── */
 .sound-toggle {
   position: absolute; z-index: 6; right: var(--gutter); bottom: max(14px, env(safe-area-inset-bottom));
-  --tilt: -2deg; border: 0; padding: 6px 12px; cursor: pointer; font-family: var(--print); font-size: 13px; color: var(--toner);
+  --tilt: -3deg; width: 52px; height: 52px; padding: 0; border: 0; cursor: pointer; display: grid; place-items: center;
 }
 body:not([data-screen='playing']) .sound-toggle { display: none; } /* 오버레이 종이를 가리지 않게 — 플레이 중에만 */
-.sound-toggle[aria-pressed='false'] { color: var(--toner-soft); text-decoration: line-through; }
+/* 매직으로 그린 스피커: 켜짐 = 음파, 꺼짐 = 빨간 X */
+.sound-toggle__icon { width: 30px; height: 30px; overflow: visible; }
+.sound-toggle__icon path { fill: none; stroke: var(--toner); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.sound-toggle__icon .spk { fill: var(--toner); }
+.sound-toggle__icon .off { stroke: var(--marker); stroke-width: 2.8; display: none; }
+.sound-toggle[aria-pressed='false'] .on { display: none; }
+.sound-toggle[aria-pressed='false'] .off { display: inline; }
+.sound-toggle[aria-pressed='false'] .spk { fill: var(--toner-soft); }
+.sound-toggle:hover { transform: rotate(var(--tilt)) scale(1.06); }
 .sound-toggle:focus-visible { outline: 3px solid var(--pen); outline-offset: 3px; }
 .hud__target { --tilt: 1deg; padding: 2px 10px; font-size: 19px; color: var(--marker); white-space: nowrap; }
 .challenge-make { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }

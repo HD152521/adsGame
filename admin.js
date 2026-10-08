@@ -2,6 +2,8 @@
 //   토큰은 sessionStorage에만(탭을 닫으면 사라짐). 광고 이름은 전부 textContent로만 넣는다.
 
 const ADMIN_TOKEN_KEY = 'ad-dodge:admin-token';
+const ADMIN_EDITABLE = new Set(['active', 'pending_review', 'hidden', 'awaiting_deposit']);
+const ADMIN_LOGO_SIZE = 256; // 구매 화면과 같은 크기로 줄여 올린다(용량·EXIF 제거)
 const ADMIN_ACTIONS = {
   pending_review: [['approve', '붙이기'], ['reject', '거절·환불']],
   active: [['hide', '떼어 내기'], ['reject', '삭제·환불']],
@@ -20,11 +22,78 @@ const ADMIN_ACTIONS = {
     /* 저장 불가 환경 — 매번 입력 */
   }
 
-  const request = async (path, method = 'GET') => {
-    const res = await fetch(path, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
+  const request = async (path, method = 'GET', body = {}) => {
+    const res = await fetch(path, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: method === 'POST' ? JSON.stringify(body) : undefined });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `요청 실패 (${res.status})`);
     return data;
+  };
+
+  /** 로고 파일 → 정사각 PNG data URL(가운데 크롭) */
+  const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const c = document.createElement('canvas');
+      c.width = ADMIN_LOGO_SIZE;
+      c.height = ADMIN_LOGO_SIZE;
+      c.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, ADMIN_LOGO_SIZE, ADMIN_LOGO_SIZE);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/png'));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('이미지를 읽을 수 없어요. PNG·JPG로 다시 골라 주세요'));
+    };
+    img.src = url;
+  });
+
+  const field = (labelText, input) => {
+    const label = document.createElement('label');
+    label.append(labelText, input);
+    return label;
+  };
+
+  /** 고치기 폼: 이름·이동 주소·로고. 바뀐 항목만 보낸다 */
+  const buildEditForm = (ad, onCancel) => {
+    const form = document.createElement('form');
+    form.className = 'admin__edit';
+    form.noValidate = true;
+    const name = Object.assign(document.createElement('input'), { type: 'text', maxLength: 16, value: ad.name, required: true });
+    // type=url이면 'fixed.example'처럼 https:// 없는 주소를 브라우저가 막는다 — 정규화·검증은 서버(validateLandingUrl)에 맡긴다
+    const url = Object.assign(document.createElement('input'), { type: 'text', inputMode: 'url', maxLength: 300, value: ad.landingUrl || '', placeholder: '비우면 이동 없음' });
+    const logo = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/png,image/jpeg,image/webp' });
+    const error = Object.assign(document.createElement('p'), { className: 'admin__edit-error' });
+    const save = Object.assign(document.createElement('button'), { type: 'submit', className: 'btn btn--primary', textContent: '고친 내용 붙이기' });
+    const cancel = Object.assign(document.createElement('button'), { type: 'button', className: 'chip', textContent: '취소' });
+    cancel.addEventListener('click', onCancel);
+    const actions = Object.assign(document.createElement('div'), { className: 'admin__edit-actions' });
+    actions.append(save, cancel);
+    form.append(field('광고 이름 (16자)', name), field('이동할 사이트', url));
+    if (ad.kind === 'logo') form.append(field('새 로고 (선택 — 안 고르면 그대로)', logo));
+    form.append(error, actions);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {};
+      if (name.value.trim() !== ad.name) body.name = name.value;
+      if (url.value.trim() !== (ad.landingUrl || '')) body.landingUrl = url.value;
+      save.disabled = true;
+      try {
+        if (logo.files && logo.files[0]) body.image = await fileToDataUrl(logo.files[0]);
+        if (Object.keys(body).length === 0) {
+          error.textContent = '바뀐 내용이 없어요';
+          return;
+        }
+        await request(`/api/admin/advertisers/${encodeURIComponent(ad.advertiserId)}/edit`, 'POST', body);
+        await load();
+      } catch (err) {
+        error.textContent = err.message;
+      } finally {
+        save.disabled = false;
+      }
+    });
+    return form;
   };
 
   const renderItem = (ad) => {
@@ -52,6 +121,21 @@ const ADMIN_ACTIONS = {
       info.append(document.createElement('br'), url);
     }
     const actions = document.createElement('div');
+    actions.className = 'admin__actions';
+    if (ADMIN_EDITABLE.has(ad.status)) {
+      const editButton = Object.assign(document.createElement('button'), { type: 'button', className: 'chip', textContent: '고치기' });
+      editButton.addEventListener('click', () => {
+        const existing = li.querySelector('.admin__edit');
+        if (existing) {
+          existing.remove();
+          return;
+        }
+        const form = buildEditForm(ad, () => form.remove());
+        li.append(form);
+        form.querySelector('input').focus();
+      });
+      actions.append(editButton);
+    }
     for (const [action, label] of ADMIN_ACTIONS[ad.status] || []) {
       const b = document.createElement('button');
       b.type = 'button';

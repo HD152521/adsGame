@@ -200,6 +200,36 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     restore: { from: [ORDER_STATUS.HIDDEN], to: ORDER_STATUS.ACTIVE },
   };
 
+  /**
+   * 관리자 수정: 이름·이동 주소·로고만(칸 수·금액은 돈이라 거절·환불 흐름으로). 보낸 항목만 바꾸고,
+   * 구매 때와 같은 검증을 거친다. 칸 추가로 나뉜 주문 전체에 함께 적용하고, 화면들에 장부를 새로 받게 알린다.
+   */
+  function editAdvertiser(advId, { name: rawName, landingUrl: rawUrl, image } = {}) {
+    const list = ordersOf(advId);
+    if (list.length === 0) throw new Error('광고를 찾을 수 없습니다');
+    const editable = list.filter((o) => o.status !== ORDER_STATUS.REFUND_REQUIRED);
+    if (editable.length === 0) throw new Error('환불 대상 광고는 고칠 수 없어요');
+    const patch = {};
+    if (rawName !== undefined) {
+      const { name, error } = validateName(rawName);
+      if (error) throw new Error(error);
+      patch.name = name;
+    }
+    if (rawUrl !== undefined) {
+      const landing = validateLandingUrl(rawUrl);
+      if (landing.error) throw new Error(landing.error);
+      patch.landingUrl = landing.url;
+    }
+    if (image) {
+      const decoded = decodeImage(image);
+      if (decoded.error) throw new Error(decoded.error);
+      patch.logoUrl = `${saveImage(advId, decoded)}?v=${now()}`; // 같은 파일 경로 — ?v로 브라우저 캐시를 끊는다
+    }
+    for (const o of editable) putOrder({ ...o, ...patch });
+    broadcast('ledger', { advertiserId: advId });
+    return publicView(orders()[editable[0].orderId]);
+  }
+
   /** 한 광고의 주문들 중 fromStatuses에 있는 것을 전부 status로 — 알림은 광고당 한 번 */
   function setAdvertiserStatus(advId, fromStatuses, status) {
     const targets = ordersOf(advId).filter((o) => fromStatuses.includes(o.status));
@@ -252,6 +282,7 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     getOrder: (orderId) => publicView(orders()[orderId]),
     getLedger,
     adminAction,
+    editAdvertiser,
     report,
     listAdvertisers,
     recordKill: stats.recordKill,

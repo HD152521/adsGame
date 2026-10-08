@@ -335,3 +335,52 @@ test('[도전장] 상한을 넘으면 가장 오래된 것부터 지운다', () 
   for (let i = 0; i < MAX_CHALLENGES; i += 1) service.createChallenge({ name: '민수', seconds: 2 });
   assert.equal(service.getChallenge(first.id), null);
 });
+
+// ── 관리자 수정: 이름·이동 주소·로고(칸 수는 돈이라 제외) ─────────────
+test('[관리자 수정] 이름·이동 주소를 바꾸면 그 광고의 주문 전체(추가 칸 포함)에 적용 + ledger 이벤트', async () => {
+  const { service, events } = setup();
+  const order = await paidSnipe(service, '민수', 2);
+  const topup = service.createTopup(order.orderId, { slots: 1, consents: CONSENTS });
+  service.confirmDeposit({ orderId: topup.orderId, status: 'DONE', amount: 1000 });
+  service.editAdvertiser(order.advertiserId, { name: '민수네', landingUrl: 'minsu.example' });
+  const ad = service.getLedger().advertisers.find((a) => a.id === order.advertiserId);
+  assert.equal(ad.name, '민수네');
+  assert.equal(ad.landingUrl, 'https://minsu.example/');
+  assert.equal(service.getOrder(topup.orderId).name, '민수네');
+  assert.ok(events.some((e) => e.type === 'ledger'));
+});
+
+test('[관리자 수정] 이동 주소를 빈칸으로 보내면 지운다, 안 보낸 항목은 그대로', async () => {
+  const { service } = setup({ classifier: M.autoApproveClassifier() });
+  const order = await service.createOrder({ kind: 'snipe', name: '민수', slots: 1, landingUrl: 'https://a.example', consents: CONSENTS });
+  service.confirmDeposit({ orderId: order.orderId, status: 'DONE', amount: 1000 });
+  service.editAdvertiser(order.advertiserId, { landingUrl: '' });
+  const view = service.getOrder(order.orderId);
+  assert.equal(view.landingUrl, null);
+  assert.equal(view.name, '민수');
+});
+
+test('[관리자 수정] 같은 검증을 거친다(욕설·위험 주소·SVG 거부), 없는 광고는 오류', async () => {
+  const { service } = setup();
+  const order = await paidSnipe(service, '민수', 1);
+  assert.throws(() => service.editAdvertiser(order.advertiserId, { name: '시발' }), /사용할 수 없는/);
+  assert.throws(() => service.editAdvertiser(order.advertiserId, { landingUrl: 'javascript:alert(1)' }), /주소/);
+  const svg = `data:image/svg+xml;base64,${Buffer.from('<svg/>').toString('base64')}`;
+  assert.throws(() => service.editAdvertiser(order.advertiserId, { image: svg }), /PNG/);
+  assert.throws(() => service.editAdvertiser('nope', { name: '아무개' }), /광고/);
+});
+
+test('[관리자 수정] 로고를 바꾸면 새 주소(캐시 무력화)로 저장, 환불 대상 광고는 수정 불가', async () => {
+  const { service, saved } = setup();
+  const order = await service.createOrder({ kind: 'logo', name: '치킨', slots: 1, image: PNG_1PX, consents: CONSENTS });
+  service.confirmDeposit({ orderId: order.orderId, status: 'DONE', amount: 1000 });
+  service.adminAction(order.advertiserId, 'approve');
+  const before = service.getOrder(order.orderId).logoUrl;
+  service.editAdvertiser(order.advertiserId, { image: PNG_1PX });
+  const after = service.getOrder(order.orderId).logoUrl;
+  assert.notEqual(after, before);
+  assert.match(after, /^\/uploads\/[a-f0-9]{12}\.png\?v=\d+$/);
+  assert.equal(saved.length, 2);
+  service.adminAction(order.advertiserId, 'reject');
+  assert.throws(() => service.editAdvertiser(order.advertiserId, { name: '바꿈' }), /환불/);
+});

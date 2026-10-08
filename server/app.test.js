@@ -311,3 +311,14 @@ test('[M1] 판 기록은 전용 레이트 리밋(분당 runs회)', async () => {
     s.app.close();
   }
 });
+
+test('[관리자 수정] POST /api/admin/advertisers/:id/edit — 토큰 필요, 장부에 바로 반영', async () => {
+  const order = await buySnipe('수정전', 1);
+  const auth = { authorization: `Bearer ${ADMIN}` };
+  assert.equal((await post(`/api/admin/advertisers/${order.advertiserId}/edit`, { name: '수정후' })).status, 401);
+  const res = await post(`/api/admin/advertisers/${order.advertiserId}/edit`, { name: '수정후' }, auth);
+  assert.equal(res.status, 200);
+  const ledger = await (await fetch(`${base}/api/ledger`)).json();
+  assert.ok(ledger.advertisers.some((a) => a.id === order.advertiserId && a.name === '수정후'));
+  assert.equal((await post(`/api/admin/advertisers/${order.advertiserId}/edit`, { name: '시발' }, auth)).status, 400);
+});

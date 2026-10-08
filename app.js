@@ -443,6 +443,7 @@ function wireRealtime({ server, worldStore, session, banner, sound }) {
       session.removeAdvertiser(advertiserId);
       worldStore.refresh();
     },
+    ledger: () => worldStore.refresh(), // 관리자가 이름·로고·이동 주소를 고침
     reconnect: () => worldStore.refresh(),
   });
   setInterval(() => worldStore.refresh(), RESYNC_MS);
@@ -452,8 +453,9 @@ function wireSoundToggle(doc, sound) {
   const button = doc.getElementById('btn-sound');
   const paintButton = () => {
     const on = !sound.isMuted();
-    button.textContent = on ? '소리 켬' : '소리 끔';
     button.setAttribute('aria-pressed', String(on));
+    button.setAttribute('aria-label', on ? '소리 끄기' : '소리 켜기');
+    button.title = on ? '소리 끄기' : '소리 켜기';
   };
   button.addEventListener('click', () => {
     sound.unlock();

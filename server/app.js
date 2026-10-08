@@ -4,7 +4,7 @@
 // 공개 API
 //   GET  /api/config                 클라이언트 설정(모의 입금 버튼 노출 여부)
 //   GET  /api/ledger                 장부·지분·보스·공개 규칙
-//   GET  /api/events                 SSE: purchase / takedown / review
+//   GET  /api/events                 SSE: purchase / takedown / review / ledger(관리자 수정)
 //   POST /api/orders                 주문 생성 → 가상계좌
 //   GET  /api/orders/:orderId        주문 상태(orderId = 비밀 토큰)
 //   POST /api/payments/webhook       PG 웹훅(서명 검증)
@@ -16,6 +16,7 @@
 // 테스트 모드(freeMode): 주문하면 결제 없이 바로 출연
 // 개발 전용(devMode): POST /api/dev/deposit/:orderId — 은행 입금 흉내(서명된 웹훅을 내부에서 발생)
 // 관리자(Bearer ADMIN_TOKEN): GET /api/admin/advertisers?status= · POST /api/admin/advertisers/:id/:action
+//   · POST /api/admin/advertisers/:id/edit { name?, landingUrl?, image? } — 이름·이동 주소·로고 수정
 
 const http = require('node:http');
 const fs = require('node:fs');
@@ -132,6 +133,11 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMo
     if (parts[1] !== 'advertisers') throw new HttpError(404, '찾을 수 없어요');
     if (req.method === 'GET' && parts.length === 2) {
       sendJson(res, 200, service.listAdvertisers(url.searchParams.get('status') || undefined));
+      return;
+    }
+    if (req.method === 'POST' && parts.length === 4 && parts[3] === 'edit') {
+      const body = parseJson(await readBody(req));
+      sendJson(res, 200, asUserError(() => service.editAdvertiser(parts[2], body)));
       return;
     }
     if (req.method === 'POST' && parts.length === 4) {
