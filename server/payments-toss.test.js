@@ -203,3 +203,14 @@ test('verifyWebhook: 조회 결과 결제가 없으면(404) 거부', async () =>
   const { p } = provider({ routes: {} });
   await assert.rejects(p.verifyWebhook({}, sampleDepositCallback()), (err) => err.code !== 'PG_UNAVAILABLE' && /검증/.test(err.message));
 });
+
+test('[리뷰 M] issueVirtualAccount: 입금 기한(dueDate) 형식이 이상해도 PG 원문 없이 쉬운 말로 실패', async () => {
+  const body = sampleIssueResponse();
+  const bad = { ...body, virtualAccount: { ...body.virtualAccount, dueDate: 'not-a-date-RAW' } };
+  const { p } = provider({ routes: { [ISSUE]: { body: bad } } });
+  await assert.rejects(p.issueVirtualAccount({ orderId: ORDER_ID, amount: 5000 }), (err) => {
+    assert.match(err.message, /가상계좌 발급/);
+    assert.ok(!err.message.includes('not-a-date-RAW'), err.message);
+    return true;
+  });
+});

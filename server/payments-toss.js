@@ -122,11 +122,19 @@ function createTossProvider({ secretKey, fetch = globalThis.fetch, lookupWebhook
       console.error('[toss] 가상계좌 발급 응답 이상', result.status, p.code || p.status, p.message || '');
       throw new Error(ISSUE_FAILED);
     }
+    let dueAt;
+    try {
+      dueAt = parseKstDate(va.dueDate);
+    } catch (err) {
+      // 다른 응답 이상과 똑같이 쉬운 말로 — PG 원문(날짜 문자열)을 사용자 오류 메시지로 흘리지 않는다
+      console.error('[toss] 가상계좌 입금 기한 형식 이상', err.message);
+      throw new Error(ISSUE_FAILED);
+    }
     return {
       bank: VA_BANKS[va.bankCode] || VA_BANKS[bank],
       accountNumber: String(va.accountNumber),
       holder,
-      dueAt: parseKstDate(va.dueDate),
+      dueAt,
       webhookSecret: String(p.secret),
       paymentKey: String(p.paymentKey || ''),
     };
