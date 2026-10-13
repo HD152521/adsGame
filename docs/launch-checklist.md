@@ -30,7 +30,7 @@
 | ☑ | 환불 완료 기록·CSV·외부 백업(S3)·최근 문제 | `9837446` (server/refund.test.js·export-csv.test.js·sigv4.test.js) | — |
 | ☑ | 관리자 레이트 리밋·무차별 대입 차단·감사 로그·보안 리뷰 | `bb469e9` (server/admin-security.test.js·audit-log.test.js) | — |
 | ☑ | 브라우저 E2E(로컬 테스트 모드) 통과 + 실기기 체크리스트 문서 | `f7f32e3` · 2026-10-13 `node e2e/run.js` 14단계 통과 | — |
-| ☑ | 운영 매뉴얼·런칭 체크리스트·README 배포/복구 절차 + 문서 정합성 테스트 | Step 8 (`launch-docs.test.js`) — 커밋 대기 | — |
+| ☑ | 운영 매뉴얼·런칭 체크리스트·README 배포/복구 절차 + 문서 정합성 테스트 | Step 8 (`launch-docs.test.js`) — db1b706 | — |
 
 ## 3. 런칭 당일 기술 점검 (배포된 운영 서버에서)
 순서대로. 하나라도 실패하면 거기서 멈추고 [운영 매뉴얼 장애 대응](operations.md#장애-대응)대로 고친 뒤 다시.
