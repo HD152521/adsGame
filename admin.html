@@ -19,13 +19,23 @@
       <label>관리자 토큰 <input name="token" type="password" autocomplete="off" required></label>
       <button class="btn btn--primary" type="submit">불러오기</button>
     </form>
+    <section id="admin-errors" class="admin__errors" aria-labelledby="admin-errors-title" hidden>
+      <h2 id="admin-errors-title">최근 문제 <small id="admin-errors-count"></small></h2>
+      <p class="admin__errors-note">서버 오류·웹훅 검증 실패·결제사 장애·백업 실패 최근 50건(재시작하면 비워짐). 자세한 내용은 fly logs.</p>
+      <ul id="admin-errors-list" class="admin__errors-list"></ul>
+    </section>
     <nav id="admin-tabs" class="admin__tabs" aria-label="상태 필터">
       <button type="button" class="chip" data-status="pending_review">검수 대기</button>
       <button type="button" class="chip" data-status="active">붙어 있음</button>
       <button type="button" class="chip" data-status="hidden">떼어 냄</button>
       <button type="button" class="chip" data-status="refund_required">환불 필요</button>
+      <button type="button" class="chip" data-status="refunded">환불 완료</button>
       <button type="button" class="chip" data-status="awaiting_deposit">입금 대기</button>
     </nav>
+    <div class="admin__export">
+      <button id="admin-export" type="button" class="chip">이 목록 CSV로 내려받기</button>
+      <small>엑셀에서 바로 열립니다. 주문번호는 앞 8자리만, 결제 비밀값은 들어가지 않습니다.</small>
+    </div>
     <p id="admin-status" class="status" role="status" aria-live="polite"></p>
     <ul id="admin-list" class="admin__list"></ul>
   </main>

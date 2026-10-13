@@ -20,6 +20,9 @@
 //   컨테이너에서는 server/container-entry.js 가 권한을 내려놓은 뒤 이 파일을 부른다(Dockerfile)
 //   BIZ_NAME · BIZ_OWNER · BIZ_REG_NO · BIZ_ADDRESS · BIZ_PHONE · BIZ_EMAIL · BIZ_MAIL_ORDER_NO · HOSTING_PROVIDER
 //                     사업자 정보 — 시작 화면·신청서·약관·개인정보처리방침 하단에 표시
+//   BACKUP_S3_ENDPOINT · BACKUP_S3_BUCKET · BACKUP_S3_ACCESS_KEY · BACKUP_S3_SECRET_KEY · BACKUP_S3_REGION
+//                     외부 백업(선택) — 다섯 값이 모두 있을 때만 백업 파일을 S3 호환 저장소에도 올린다(server/sigv4.js).
+//                     업로드 실패는 서버를 멈추지 않고 관리자 화면 "최근 문제"에 남는다
 
 const path = require('node:path');
 const { createApp } = require('./app.js');
@@ -28,6 +31,8 @@ const M = require('./moderation.js');
 const { checkStartupConfig, readBusinessInfo, isProductionMode } = require('./business.js');
 const { readPaymentConfig } = require('./payments.js');
 const { installShutdown } = require('./shutdown.js');
+const { createErrorLog } = require('./error-log.js');
+const { readS3Config, createS3Uploader } = require('./sigv4.js');
 
 const MIN_SECRET_LENGTH = 16;
 
@@ -62,11 +67,20 @@ const host = devMode || freeMode ? '127.0.0.1' : process.env.HOST || '0.0.0.0';
 if (freeMode) console.warn('[config] ⚠ FREE_MODE=1 — 결제 없이 광고가 바로 추가됩니다(테스트 모드). 127.0.0.1 에만 엽니다.');
 if (devMode) console.warn('[config] ⚠ DEV_DEPOSIT=1 — 모의 입금이 켜져 있습니다. 127.0.0.1 에만 열고, 운영에서는 절대 켜지 마세요.');
 
+const s3 = readS3Config(process.env);
+if (s3.missing.length > 0) console.warn(`[config] 외부 백업 설정이 일부만 있습니다 — 꺼 둡니다(빠진 값: ${s3.missing.join(', ')})`);
+if (s3.error) console.warn(`[config] 외부 백업을 꺼 둡니다: ${s3.error}`);
+
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
+const adminToken = requireSecret('ADMIN_TOKEN');
+const webhookSecret = payment.provider === 'mock' ? requireSecret('WEBHOOK_SECRET') : undefined;
+// 최근 문제(관리자 화면) — 설명 안에 비밀값이 섞여 들어와도 가린다
+const errorLog = createErrorLog({ secrets: [adminToken, webhookSecret, payment.tossSecretKey, s3.config && s3.config.secretAccessKey, s3.config && s3.config.accessKeyId] });
 const app = createApp({
   dataDir,
-  adminToken: requireSecret('ADMIN_TOKEN'),
-  webhookSecret: payment.provider === 'mock' ? requireSecret('WEBHOOK_SECRET') : undefined,
+  adminToken,
+  webhookSecret,
+  errorLog,
   payment,
   devMode,
   freeMode,
@@ -75,10 +89,15 @@ const app = createApp({
   business: readBusinessInfo(process.env),
 });
 
-startBackups({ dataDir }); // 1시간마다 data/backups/ 에 장부 사본(이틀치 보관)
+// 1시간마다 data/backups/ 에 장부 사본(이틀치 보관). 외부 백업이 켜져 있으면 같은 파일을 볼륨 밖에도 올린다
+startBackups({
+  dataDir,
+  upload: s3.config ? createS3Uploader({ config: s3.config }) : null,
+  onError: (err) => errorLog.record('backup', err),
+});
 
 app.server.listen(port, host, () => {
-  console.info(`[server] http://${devMode || freeMode ? "127.0.0.1" : "localhost"}:${app.server.address().port}  (운영모드=${isProductionMode(process.env) ? '켜짐' : '꺼짐'}, 테스트모드=${freeMode ? '켜짐' : '꺼짐'}, 결제=${payment.provider}, 모의입금=${devMode && payment.provider === 'mock' ? '켜짐' : '꺼짐'}, 검수=${moderationMode})`);
+  console.info(`[server] http://${devMode || freeMode ? "127.0.0.1" : "localhost"}:${app.server.address().port}  (운영모드=${isProductionMode(process.env) ? '켜짐' : '꺼짐'}, 테스트모드=${freeMode ? '켜짐' : '꺼짐'}, 결제=${payment.provider}, 모의입금=${devMode && payment.provider === 'mock' ? '켜짐' : '꺼짐'}, 검수=${moderationMode}, 외부백업=${s3.config ? '켜짐' : '꺼짐'})`);
   console.info(`[server] 관리자: /admin.html`);
 });
 

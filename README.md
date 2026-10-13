@@ -25,7 +25,13 @@
 - **광고 성과(참고 기록)**: 내 광고 보기에서 날아간 횟수·쓰러뜨린 수·사이트 이동 수 — 클라이언트 보고값이라 약속 아님
 - **칸 추가**: 붙어 있는 내 광고에 칸만 더 얹기(주문번호가 소유 증명, 재검수 없음). 가림·복구는 원래 칸과 함께
 - **관리자 고치기**: 붙어 있음·검수 대기·떼어 냄 목록에서 광고 이름·이동 주소·로고를 수정(칸 수·금액은 제외 — 거절·환불로). 같은 검증을 거치고 게임 화면에 바로 반영
-- **자동 백업**: 서버가 1시간마다 `data/backups/`에 장부 사본(이틀치)
+- **자동 백업**: 서버가 1시간마다 `data/backups/`에 장부 사본(이틀치). 외부 백업(선택)을 켜면 같은 파일을 S3 호환 저장소에도 올린다
+- **환불 완료 기록**: 관리자 "환불 필요" 목록에서 주문별로 "환불 완료 처리"(처리 일시·메모). 환불 필요 → 환불 완료만 되고 되돌릴 수 없다.
+  실제 돈은 운영자가 직접 이체한 뒤 기록만 한다(PG 환불 API 는 부르지 않는다). "환불 완료" 탭에서 기록을 본다
+- **CSV 내보내기**: 관리자 화면 "이 목록 CSV로 내려받기" — 지금 탭의 주문(주문번호 앞 8자리·광고 이름·종류·칸·금액·상태·생성/입금/환불 일시·환불 메모).
+  엑셀용 UTF-8 BOM·CRLF, `=`·`+`·`-`·`@`로 시작하는 셀은 앞에 `'`(CSV 인젝션 방지). 결제 secret·paymentKey 는 들어가지 않는다
+- **최근 문제**: 서버 500 오류·웹훅 검증 실패·PG 장애·백업 실패 최근 50건을 관리자 화면 맨 위에 보여준다(메모리 — 재시작하면 비워짐).
+  요청 본문·쿼리는 남기지 않고, 설명 안의 비밀값(관리자 토큰·웹훅 비밀값·토스 키·S3 키·긴 주문번호)은 가린다
 
 ## 실행
 의존성 0 (npm·번들러 없음). Node 20+.
@@ -61,6 +67,7 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 | `NODE_ENV=production` | **운영 모드**(컨테이너 이미지 기본값). 아래 사업자 정보 필수 값이 비거나 형식이 틀리면, `FREE_MODE`·`DEV_DEPOSIT`이 켜져 있으면, `ADMIN_TOKEN`이 32자 미만이면, 모의 결제(`mock`)면 서버가 시작을 거부한다 |
 | `PORT` | 기본 `5173` (컨테이너는 `8080`) |
 | `BIZ_NAME` · `BIZ_OWNER` · `BIZ_REG_NO` · `BIZ_ADDRESS` · `BIZ_PHONE` · `BIZ_EMAIL` · `HOSTING_PROVIDER` | 사업자 정보(법정 표시) — 운영 모드 필수. `BIZ_REG_NO`는 000-00-00000, `BIZ_EMAIL`은 메일 형식 |
+| `BACKUP_S3_ENDPOINT` · `BACKUP_S3_BUCKET` · `BACKUP_S3_ACCESS_KEY` · `BACKUP_S3_SECRET_KEY` · `BACKUP_S3_REGION` | **외부 백업(선택)** — 다섯 값이 **모두** 있을 때만 매시간 백업 파일을 `{ENDPOINT}/{BUCKET}/ad-dodge/db-….json`에 PUT(SigV4 서명). 일부만 있으면 경고 후 꺼짐, ENDPOINT 는 `https://`만. 버킷은 **비공개**로(백업에 결제 검증값이 들어 있다), 키는 그 버킷 쓰기 전용 권장. 업로드 실패는 서버를 멈추지 않고 "최근 문제"에 남는다 |
 | `BIZ_MAIL_ORDER_NO` | 통신판매업 신고번호 — 운영 모드에서도 선택(PG 구매안전서비스 확인증 뒤에 신고하므로). 비면 화면에 "신고 준비 중" |
 
 ### 운영 모드와 사업자 정보(법정 표시)
@@ -130,6 +137,10 @@ Windows의 podman(WSL)에서 `127.0.0.1:5180`이 빈 응답이면 포트 중계(
 6. `https://{이름}.fly.dev/api/health` → 200, `http://`로 열면 https로 넘어가는지 확인
 7. 토스 개발자센터 웹훅 주소를 `https://{도메인}/api/payments/webhook`으로 등록(위 결제 절차)
 8. 백업: 볼륨 안 `/data/backups/`에 1시간마다 쌓인다. 볼륨 스냅샷(`fly volumes snapshots list`)도 켜져 있는지 확인. 복구는 `fly ssh console`로 `/data/db.json`을 백업본으로 바꾸고 `fly machine restart`
+   - 볼륨 밖 사본: S3 호환 저장소(Cloudflare R2·AWS S3 등) 버킷과 키를 만들었으면 `fly secrets set BACKUP_S3_ENDPOINT=https://… BACKUP_S3_BUCKET=… BACKUP_S3_ACCESS_KEY=… BACKUP_S3_SECRET_KEY=… BACKUP_S3_REGION=…`
+     → `fly logs`에서 `외부백업=켜짐` 확인, 한 시간 뒤 버킷에 `ad-dodge/db-….json`이 생겼는지 확인. 실패하면 관리자 화면 "최근 문제"에 `백업 실패`가 뜬다.
+     저장소를 아직 안 만들었으면 외부 백업은 **볼륨 스냅샷(fly volumes snapshots)으로 대신**한다
+   - 서명(SigV4)은 AWS 공개 테스트 벡터로 검증했다(`server/sigv4.test.js`). 실제 저장소 연결은 키가 생긴 뒤 사람이 위 절차로 한 번 확인한다
 
 ## Vercel (정적 미리보기)
 Vercel은 서버리스라 `server/`(장부 파일·업로드·SSE)가 돌지 않는다. 올리면 **게임만** 동작하고(관리사무소 광고만 날아옴),
@@ -150,14 +161,17 @@ Vercel은 서버리스라 `server/`(장부 파일·업로드·SSE)가 돌지 않
 | `app.js` | 화면 전환·루프·실시간 배너·킬 순위·신고 배선 |
 | `admin.html` / `terms.html` / `privacy.html` | 관리자 검수 / 약관 초안 / 개인정보처리방침 초안 |
 | `bizinfo.js` | 하단 사업자 정보 표시(`/api/business` → textContent, 서버 없으면 "준비 중") |
-| `server/orders.js` | 주문 상태기계: 입금 대기 → (검수) → 출연 / 가림 / 환불 필요 |
+| `server/orders.js` | 주문 상태기계: 입금 대기 → (검수) → 출연 / 가림 / 환불 필요 → 환불 완료(기록) |
 | `server/payments.js` | PG 인터페이스 + **모의 PG** (가상계좌·HMAC 서명 웹훅) + 제공자 선택(`PAYMENT_PROVIDER`) |
 | `server/payments-toss.js` | **토스페이먼츠 가상계좌** provider (발급·웹훅 secret 검증·결제 조회 재확인) |
 | `server/moderation.js` | 이름 필터·이미지 형식 검증 + 분류기 인터페이스 |
 | `server/moderation-vision.js` | Google Vision 이미지 검수 분류기(SafeSearch + 얼굴 감지, 실패 시 검토) |
 | `server/app.js` | HTTP 라우팅·레이트 리밋·관리자 인증·정적 파일(허용 목록) |
 | `server/stats.js` | 판 기록·오늘 백분위·도전장·광고 성과·킬 순위(위조 가능한 값이라 범위·상한으로 묶음) |
-| `server/backup.js` | 장부 주기 백업 |
+| `server/backup.js` | 장부 주기 백업(+ 외부 업로드 선택, 실패는 "최근 문제"로) |
+| `server/sigv4.js` | 외부 백업 — AWS SigV4 서명(내장 crypto)·S3 호환 PUT 업로더·`BACKUP_S3_*` 읽기 |
+| `server/export-csv.js` | 주문 CSV(BOM·CRLF·이스케이프·CSV 인젝션 방지, 허용한 열만) |
+| `server/error-log.js` | 최근 문제 링버퍼(50건, 비밀값 가림) |
 | `server/business.js` | 사업자 정보 환경변수 읽기·운영 모드 시작 점검(관리자 토큰 32자·모의 결제 금지 포함) |
 | `server/health.js` | 헬스체크(`/api/health`) — 장부 읽기 가능 여부 |
 | `server/shutdown.js` | SIGTERM·SIGINT → lazy 쓰기 flush 후 종료 |

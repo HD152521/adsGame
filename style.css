@@ -315,6 +315,17 @@ body[data-screen='start'] .hud, body[data-screen='buying'] .hud { visibility: hi
 .admin__edit input:focus { outline: none; border-bottom-color: var(--pen); }
 .admin__edit-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .admin__edit-error { margin: 0; color: var(--marker); font-size: 13px; min-height: 1.2em; }
+.admin__refund { color: var(--pen); }
+.admin__export { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.admin__export small { color: var(--toner-soft); font-size: 12px; }
+.admin__errors { margin: 0 0 16px; padding: 10px 12px; border: 1.5px dashed var(--toner-soft); background: var(--paper-shade); }
+.admin__errors--alert { border-color: var(--marker); }
+.admin__errors h2 { margin: 0 0 4px; font-size: 16px; }
+.admin__errors h2 small { color: var(--toner-soft); font-size: 12px; font-weight: 400; }
+.admin__errors--alert h2 small { color: var(--marker); }
+.admin__errors-note { margin: 0 0 6px; font-size: 12px; color: var(--toner-soft); }
+.admin__errors-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow-y: auto; font-family: var(--type); font-size: 12px; word-break: break-all; }
+.admin__errors-list time { color: var(--toner-soft); }
 .btn { font: inherit; cursor: pointer; }
 .btn--primary { background: var(--toner); color: var(--paper); border: 0; padding: 8px 16px; font-family: var(--display); letter-spacing: var(--track-display); }
 

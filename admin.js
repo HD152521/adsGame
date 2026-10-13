@@ -1,4 +1,6 @@
-// 관리자 페이지 — 검수 대기열 승인/거절, 신고로 가려진 광고 복구, 환불 대상 확인.
+// 관리자 페이지 — 검수 대기열 승인/거절, 신고로 가려진 광고 복구, 환불 대상 확인·환불 완료 기록,
+//   주문 CSV 내려받기, 최근 문제(서버 오류·웹훅·PG·백업 실패) 확인.
+//   환불 완료는 "기록"만 한다 — 실제 돈은 운영자가 직접 이체한 뒤 처리 일시·메모를 남긴다(되돌리기 없음).
 //   토큰은 sessionStorage에만(탭을 닫으면 사라짐). 광고 이름은 전부 textContent로만 넣는다.
 
 const ADMIN_TOKEN_KEY = 'ad-dodge:admin-token';
@@ -9,8 +11,11 @@ const ADMIN_ACTIONS = {
   active: [['hide', '떼어 내기'], ['reject', '삭제·환불']],
   hidden: [['restore', '다시 붙이기'], ['reject', '삭제·환불']],
   refund_required: [],
+  refunded: [],
   awaiting_deposit: [],
 };
+const ADMIN_REFUND_MEMO_MAX = 200;
+const ADMIN_ERROR_KIND = { server: '서버 오류', webhook: '웹훅 검증 실패', pg: '결제사 장애', backup: '백업 실패', other: '기타' };
 
 (function bootAdmin() {
   const $ = (id) => document.getElementById(id);
@@ -96,6 +101,63 @@ const ADMIN_ACTIONS = {
     return form;
   };
 
+  /** datetime-local 기본값 — 지금(이 PC 시각) */
+  const localNow = () => {
+    const d = new Date();
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  };
+
+  /** 환불 완료 기록 폼: 처리 일시·메모. 주문 하나 단위(칸 추가 주문은 따로 처리) */
+  const buildRefundForm = (ad, onCancel) => {
+    const form = document.createElement('form');
+    form.className = 'admin__edit';
+    const at = Object.assign(document.createElement('input'), { type: 'datetime-local', value: localNow(), required: true });
+    const memo = Object.assign(document.createElement('input'), { type: 'text', maxLength: ADMIN_REFUND_MEMO_MAX, placeholder: '예: 국민 123-45… 로 이체, 거래번호' });
+    const error = Object.assign(document.createElement('p'), { className: 'admin__edit-error' });
+    const save = Object.assign(document.createElement('button'), { type: 'submit', className: 'btn btn--primary', textContent: '환불 완료로 기록' });
+    const cancel = Object.assign(document.createElement('button'), { type: 'button', className: 'chip', textContent: '취소' });
+    cancel.addEventListener('click', onCancel);
+    const actions = Object.assign(document.createElement('div'), { className: 'admin__edit-actions' });
+    actions.append(save, cancel);
+    const note = Object.assign(document.createElement('small'), { textContent: `돈을 먼저 돌려준 뒤 기록하세요. 기록 후에는 되돌릴 수 없습니다 · ${ad.amount.toLocaleString('ko-KR')}원` });
+    form.append(note, field('처리 일시', at), field(`메모 (${ADMIN_REFUND_MEMO_MAX}자)`, memo), error, actions);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const when = new Date(at.value);
+      if (Number.isNaN(when.getTime())) {
+        error.textContent = '처리 일시를 골라 주세요';
+        return;
+      }
+      if (!window.confirm(`${ad.name} · ${ad.amount.toLocaleString('ko-KR')}원 — 환불 완료로 기록할까요? 되돌릴 수 없습니다.`)) return;
+      save.disabled = true;
+      try {
+        await request(`/api/admin/orders/${encodeURIComponent(ad.orderId)}/refund`, 'POST', { refundedAt: when.toISOString(), memo: memo.value });
+        await load();
+      } catch (err) {
+        error.textContent = err.message;
+      } finally {
+        save.disabled = false;
+      }
+    });
+    return form;
+  };
+
+  /** 줄 끝에 폼 하나를 열고 닫는 버튼 */
+  const toggleFormButton = (li, label, build) => {
+    const button = Object.assign(document.createElement('button'), { type: 'button', className: 'chip', textContent: label });
+    button.addEventListener('click', () => {
+      const existing = li.querySelector('.admin__edit');
+      if (existing) {
+        existing.remove();
+        return;
+      }
+      const form = build(() => form.remove());
+      li.append(form);
+      form.querySelector('input').focus();
+    });
+    return button;
+  };
+
   const renderItem = (ad) => {
     const li = document.createElement('li');
     li.className = 'admin__item';
@@ -120,22 +182,16 @@ const ADMIN_ACTIONS = {
       url.textContent = `→ ${ad.landingUrl}`;
       info.append(document.createElement('br'), url);
     }
+    if (ad.status === 'refunded') {
+      const refund = document.createElement('small');
+      refund.className = 'admin__refund';
+      refund.textContent = `환불 완료 ${ad.refundedAt ? new Date(ad.refundedAt).toLocaleString('ko-KR') : ''}${ad.refundMemo ? ` · ${ad.refundMemo}` : ''}`;
+      info.append(document.createElement('br'), refund);
+    }
     const actions = document.createElement('div');
     actions.className = 'admin__actions';
-    if (ADMIN_EDITABLE.has(ad.status)) {
-      const editButton = Object.assign(document.createElement('button'), { type: 'button', className: 'chip', textContent: '고치기' });
-      editButton.addEventListener('click', () => {
-        const existing = li.querySelector('.admin__edit');
-        if (existing) {
-          existing.remove();
-          return;
-        }
-        const form = buildEditForm(ad, () => form.remove());
-        li.append(form);
-        form.querySelector('input').focus();
-      });
-      actions.append(editButton);
-    }
+    if (ADMIN_EDITABLE.has(ad.status)) actions.append(toggleFormButton(li, '고치기', (close) => buildEditForm(ad, close)));
+    if (ad.status === 'refund_required') actions.append(toggleFormButton(li, '환불 완료 처리', (close) => buildRefundForm(ad, close)));
     for (const [action, label] of ADMIN_ACTIONS[ad.status] || []) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -148,8 +204,49 @@ const ADMIN_ACTIONS = {
     return li;
   };
 
+  /** 최근 문제 — 관리자 화면 맨 위. 없으면 "없음" */
+  const loadErrors = async () => {
+    try {
+      const { errors } = await request('/api/admin/errors');
+      const items = errors.map((e) => {
+        const li = document.createElement('li');
+        const when = Object.assign(document.createElement('time'), { textContent: new Date(e.at).toLocaleString('ko-KR') });
+        const kind = Object.assign(document.createElement('b'), { textContent: ADMIN_ERROR_KIND[e.kind] || ADMIN_ERROR_KIND.other });
+        li.append(when, ' ', kind, ' ', e.message);
+        return li;
+      });
+      $('admin-errors-list').replaceChildren(...items);
+      $('admin-errors-count').textContent = errors.length ? `${errors.length}건` : '없음';
+      $('admin-errors').classList.toggle('admin__errors--alert', errors.length > 0);
+      $('admin-errors').hidden = false;
+    } catch {
+      $('admin-errors').hidden = true; // 토큰이 틀렸으면 목록 쪽 메시지로 안내된다
+    }
+  };
+
+  /** CSV 내려받기 — 토큰을 헤더로 보내야 해서 링크 대신 fetch → blob */
+  const exportCsv = async () => {
+    try {
+      const res = await fetch(`/api/admin/export.csv?status=${encodeURIComponent(status)}`, { headers: { authorization: `Bearer ${token}` } });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `내려받기 실패 (${res.status})`);
+      }
+      const name = (/filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '') || [])[1] || 'ad-dodge-orders.csv';
+      const url = URL.createObjectURL(await res.blob());
+      const a = Object.assign(document.createElement('a'), { href: url, download: name });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      $('admin-status').textContent = err.message;
+    }
+  };
+
   const load = async () => {
     for (const b of document.querySelectorAll('#admin-tabs [data-status]')) b.setAttribute('aria-pressed', String(b.dataset.status === status));
+    loadErrors();
     try {
       const list = await request(`/api/admin/advertisers?status=${status}`);
       $('admin-list').replaceChildren(...list.map(renderItem));
@@ -179,6 +276,7 @@ const ADMIN_ACTIONS = {
     }
     load();
   });
+  $('admin-export').addEventListener('click', exportCsv);
   $('admin-tabs').addEventListener('click', (e) => {
     if (!e.target.dataset.status) return;
     status = e.target.dataset.status;

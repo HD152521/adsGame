@@ -1,5 +1,5 @@
 // HTTP 라우팅 — 요청 검증·레이트 리밋·인증만 하고 규칙은 orders.js에 맡긴다.
-//   createApp(config) → { server, service, provider, close } (테스트는 포트 0에 띄운다)
+//   createApp(config) → { server, service, provider, errorLog, close } (테스트는 포트 0에 띄운다)
 //
 // 공개 API
 //   GET  /api/health                 헬스체크 — 장부를 읽을 수 있으면 200 { ok:true }, 아니면 503 { ok:false } (server/health.js). IP별 분당 30회 리밋
@@ -20,6 +20,9 @@
 // 결제 제공자: payment = { provider: 'mock' | 'toss', tossSecretKey, tossBank } (server/payments.js) — fetch 는 테스트에서 주입
 // 관리자(Bearer ADMIN_TOKEN): GET /api/admin/advertisers?status= · POST /api/admin/advertisers/:id/:action
 //   · POST /api/admin/advertisers/:id/edit { name?, landingUrl?, image? } — 이름·이동 주소·로고 수정
+//   · POST /api/admin/orders/:orderId/refund { refundedAt?, memo? } — 환불 필요 → 환불 완료 기록(주문 단위, 되돌리기 없음)
+//   · GET  /api/admin/export.csv?status= — 주문 CSV(UTF-8 BOM·CRLF·CSV 인젝션 방지, 결제 비밀값 없음)
+//   · GET  /api/admin/errors — 최근 문제 50건(500 오류·웹훅 검증 실패·PG 장애·백업 실패, server/error-log.js)
 
 const http = require('node:http');
 const fs = require('node:fs');
@@ -28,16 +31,32 @@ const crypto = require('node:crypto');
 
 const { createStore } = require('./store.js');
 const { createPaymentProvider } = require('./payments.js');
-const { createOrderService } = require('./orders.js');
+const { createOrderService, ORDER_STATUS } = require('./orders.js');
 const { createEventHub, createRateLimiter } = require('./realtime.js');
-const { HttpError, readBody, parseJson, sendJson, serveStatic } = require('./http-util.js');
+const { HttpError, readBody, parseJson, send, sendJson, serveStatic } = require('./http-util.js');
 const { SEED_LEDGER } = require('../seed-ledger.js');
 const { publicBusinessInfo } = require('./business.js');
 const { checkLedger } = require('./health.js');
+const { ordersToCsv } = require('./export-csv.js');
+const { createErrorLog, maskPath, ERROR_LOG_MAX } = require('./error-log.js');
 
 const APP_ROOT = path.join(__dirname, '..');
 const DEFAULT_LIMITS = { orders: 5, kills: 60, reports: 10, challenges: 10, runs: 15, health: 30, windowMs: 60_000 };
 const VISIT_DEDUP_MAX = 50_000; // 하루치 (IP·광고) 쌍 기억 상한 — 넘치면 비우고 다시
+const KNOWN_STATUSES = new Set(Object.values(ORDER_STATUS));
+const PG_ERROR_CODES = new Set(['PG_UNAVAILABLE', 'PG_ISSUE_FAILED']);
+const KST_OFFSET_MS = 9 * 3600 * 1000;
+
+/** ?status= → 알려진 상태 | undefined(전체). 모르는 값은 400 */
+function statusParam(url) {
+  const status = url.searchParams.get('status');
+  if (!status) return undefined;
+  if (!KNOWN_STATUSES.has(status)) throw new HttpError(400, '알 수 없는 상태예요');
+  return status;
+}
+
+/** 오늘(한국 시각) YYYYMMDD — 내려받는 파일 이름용 */
+const kstDay = (ms) => new Date(ms + KST_OFFSET_MS).toISOString().slice(0, 10).replace(/-/g, '');
 
 // TRUST_PROXY=1 은 "앞단에 신뢰하는 프록시가 정확히 한 단" 있다는 뜻이다. 프록시는 X-Forwarded-For 끝에
 // 실제 접속 IP를 덧붙이므로 **마지막** 값만 믿는다 — 앞쪽 값은 클라이언트가 마음대로 넣을 수 있다(보안 리뷰 H1).
@@ -63,8 +82,10 @@ function createImageSaver(dataDir) {
   };
 }
 
-function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequested = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, business, payment = { provider: 'mock' }, fetch, now = Date.now }) {
+function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequested = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, business, payment = { provider: 'mock' }, fetch, now = Date.now, errorLog: givenErrorLog }) {
   const businessInfo = publicBusinessInfo(business);
+  // 최근 문제 — index.js 가 백업 실패도 같은 곳에 쓰도록 밖에서 넘길 수 있다(그때 S3 키도 가릴 목록에 넣는다)
+  const errorLog = givenErrorLog || createErrorLog({ now, secrets: [adminToken, webhookSecret, payment.tossSecretKey] });
   const hub = createEventHub();
   let service = null; // provider 가 웹훅 검증 때 주문에 저장된 secret 을 찾는다(서비스는 아래에서 만든다)
   const provider = createPaymentProvider({ ...payment, webhookSecret, fetch, now, lookupWebhookSecret: (orderId) => service.getWebhookSecret(orderId) });
@@ -128,9 +149,11 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     } catch (err) {
       if (err.code === 'PG_UNAVAILABLE') {
         console.error('[webhook] 결제 조회 실패 — PG 재전송을 기다립니다', err.message);
+        errorLog.record('pg', `웹훅 결제 조회 실패(재전송 대기): ${err.message}`);
         throw new HttpError(503, '잠시 후 다시 보내 주세요');
       }
       console.warn('[webhook] 검증 실패', err.message);
+      errorLog.record('webhook', `웹훅 검증 실패: ${err.message}`);
       throw new HttpError(401, '서명이 올바르지 않아요');
     }
     sendJson(res, 200, asUserError(() => service.confirmDeposit(payload)));
@@ -144,12 +167,35 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     sendJson(res, 200, asUserError(() => service.confirmDeposit(payload)));
   }
 
+  /** 주문 만들기·칸 추가 실패 → 400. PG 장애(가상계좌 발급 실패)는 최근 문제에도 남긴다 */
+  const orderError = (err) => {
+    if (PG_ERROR_CODES.has(err.code)) errorLog.record('pg', `가상계좌 발급 실패: ${err.detail || err.message}`);
+    return new HttpError(400, err.message);
+  };
+
+  function sendCsv(res, status) {
+    const csv = ordersToCsv(service.exportRows(status));
+    const filename = `ad-dodge-orders-${kstDay(now())}${status ? `-${status}` : ''}.csv`;
+    send(res, 200, csv, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${filename}"`, 'cache-control': 'no-store' });
+  }
+
+  /** 광고(advertisers) 밖의 관리자 API — 환불 완료 기록·CSV 내보내기·최근 문제 */
+  async function handleAdminOps(req, res, url, parts) {
+    if (req.method === 'GET' && parts.length === 2 && parts[1] === 'export.csv') return sendCsv(res, statusParam(url));
+    if (req.method === 'GET' && parts.length === 2 && parts[1] === 'errors') return sendJson(res, 200, { errors: errorLog.list(), max: ERROR_LOG_MAX });
+    if (req.method === 'POST' && parts.length === 4 && parts[1] === 'orders' && parts[3] === 'refund') {
+      const body = parseJson(await readBody(req));
+      return sendJson(res, 200, asUserError(() => service.markRefunded(parts[2], { refundedAt: body.refundedAt, memo: body.memo })));
+    }
+    throw new HttpError(404, '찾을 수 없어요');
+  }
+
   async function handleAdmin(req, res, url, parts) {
     if (!isAdmin(req, adminToken)) throw new HttpError(401, '관리자 인증이 필요해요');
-    // parts: ['admin', 'advertisers', id?, action?]
-    if (parts[1] !== 'advertisers') throw new HttpError(404, '찾을 수 없어요');
+    // parts: ['admin', 'advertisers', id?, action?] | ['admin', 'orders', orderId, 'refund'] | ['admin', 'export.csv'] | ['admin', 'errors']
+    if (parts[1] !== 'advertisers') return handleAdminOps(req, res, url, parts);
     if (req.method === 'GET' && parts.length === 2) {
-      sendJson(res, 200, service.listAdvertisers(url.searchParams.get('status') || undefined));
+      sendJson(res, 200, service.listAdvertisers(statusParam(url)));
       return;
     }
     if (req.method === 'POST' && parts.length === 4 && parts[3] === 'edit') {
@@ -196,13 +242,13 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
         if (parts[2] === 'topup') {
           const body = parseJson(await readBody(req));
           const topup = await service.createTopup(String(parts[1]), body).catch((err) => {
-            throw new HttpError(400, err.message);
+            throw orderError(err);
           });
           return sendJson(res, 201, topup);
         }
         const body = parseJson(await readBody(req));
         const order = await service.createOrder(body).catch((err) => {
-          throw new HttpError(400, err.message);
+          throw orderError(err);
         });
         return sendJson(res, 201, order);
       }
@@ -257,7 +303,11 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
   const server = http.createServer((req, res) => {
     route(req, res).catch((err) => {
       const status = err instanceof HttpError ? err.status : 500;
-      if (status === 500) console.error('[server]', req.method, req.url, err);
+      if (status === 500) {
+        console.error('[server]', req.method, req.url, err);
+        // 요청 본문·쿼리는 남기지 않는다(경로의 주문번호도 앞 8자리만)
+        errorLog.record('server', `${req.method} ${maskPath(req.url)}: ${err && err.message ? err.message : err}`);
+      }
       if (!res.headersSent) sendJson(res, status, { error: status === 500 ? '서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요' : err.message });
       else res.end();
     });
@@ -267,6 +317,7 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     server,
     service,
     provider,
+    errorLog,
     close() {
       store.flush();
       store.close();

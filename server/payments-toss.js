@@ -53,6 +53,14 @@ const VA_BANKS = Object.freeze({
   '81': '하나은행',
 });
 
+/** 가상계좌 발급 실패 — 사용자에게는 쉬운 말, err.code·detail 은 관리자 "최근 문제"용(서버 안에서만) */
+function issueFailed(detail) {
+  const err = new Error(ISSUE_FAILED);
+  err.code = 'PG_ISSUE_FAILED';
+  err.detail = detail;
+  return err;
+}
+
 function pgUnavailable(detail) {
   const err = new Error(`결제사(토스페이먼츠)에 연결하지 못했습니다: ${detail}`);
   err.code = 'PG_UNAVAILABLE';
@@ -113,14 +121,14 @@ function createTossProvider({ secretKey, fetch = globalThis.fetch, lookupWebhook
       result = await call('POST', '/v1/virtual-accounts', { body: request, idempotencyKey: `va-${orderId}` });
     } catch (err) {
       console.error('[toss] 가상계좌 발급 요청 실패', err.message);
-      throw new Error(ISSUE_FAILED);
+      throw issueFailed(err.message);
     }
     const p = result.body || {};
     const va = p.virtualAccount;
     const ok = result.status === 200 && p.orderId === orderId && p.totalAmount === amount && p.status === 'WAITING_FOR_DEPOSIT' && va && va.accountNumber && p.secret;
     if (!ok) {
       console.error('[toss] 가상계좌 발급 응답 이상', result.status, p.code || p.status, p.message || '');
-      throw new Error(ISSUE_FAILED);
+      throw issueFailed(`응답 이상 HTTP ${result.status} ${p.code || p.status || ''}`);
     }
     let dueAt;
     try {
@@ -128,7 +136,7 @@ function createTossProvider({ secretKey, fetch = globalThis.fetch, lookupWebhook
     } catch (err) {
       // 다른 응답 이상과 똑같이 쉬운 말로 — PG 원문(날짜 문자열)을 사용자 오류 메시지로 흘리지 않는다
       console.error('[toss] 가상계좌 입금 기한 형식 이상', err.message);
-      throw new Error(ISSUE_FAILED);
+      throw issueFailed('입금 기한 형식 이상');
     }
     return {
       bank: VA_BANKS[va.bankCode] || VA_BANKS[bank],

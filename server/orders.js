@@ -6,13 +6,15 @@
 //                  ─(검수 대기)→ PENDING_REVIEW ─(관리자 approve)→ ACTIVE
 //                  ─(기한 초과·한도 초과)→ REFUND_REQUIRED
 //   ACTIVE ─(권리침해 신고 즉시 / 일반 신고 누적)→ HIDDEN ─(관리자 restore)→ ACTIVE
-//   관리자 reject → REFUND_REQUIRED
+//   관리자 reject → REFUND_REQUIRED ─(관리자가 직접 돌려준 뒤 "환불 완료" 기록)→ REFUNDED (끝 — 되돌리기 없음)
 //
 // 불변식(server/orders.test.js):
 //   - 장부 = ACTIVE 주문(하나도 없을 때만 하우스 광고). 확정되지 않은 돈은 확률에 영향을 주지 않는다
 //   - 같은 웹훅이 두 번 와도 한 번만 반영, 금액이 다르면 반영하지 않는다
 //   - orderId는 추측 불가능한 비밀 토큰(주문 조회 권한), advertiserId는 공개 id — 둘을 섞지 않는다
 //   - PG 웹훅 검증값(payment.webhookSecret)·paymentKey는 주문에만 저장하고 공개 응답(publicView)에 넣지 않는다
+//   - REFUNDED 는 REFUND_REQUIRED 에서만 들어갈 수 있고 빠져나가는 길이 없다(server/refund.test.js).
+//     PG 환불 API 는 부르지 않는다 — 사람이 이체한 뒤 처리 일시·메모를 "기록"만 한다
 
 const crypto = require('node:crypto');
 const { SLOT_PRICE, MAX_SLOTS, computeShares, findBossId, SNIPE_RATE } = require('../shares.js');
@@ -26,7 +28,10 @@ const ORDER_STATUS = Object.freeze({
   ACTIVE: 'active',
   HIDDEN: 'hidden',
   REFUND_REQUIRED: 'refund_required',
+  REFUNDED: 'refunded',
 });
+const REFUND_MEMO_MAX = 200;
+const REFUND_CLOCK_SKEW_MS = 60_000; // 관리자 PC 시계가 조금 빨라도 "미래"로 거부하지 않게
 const MAX_SLOTS_PER_ORDER = 100000; // 1억 원 — 오입력 방지
 const REPORT_HIDE_THRESHOLD = 3;
 const REPORT_REASONS = new Set(['rights', 'obscene', 'hate', 'other']);
@@ -38,6 +43,23 @@ const randomId = (bytes) => crypto.randomBytes(bytes).toString('hex');
 async function issueAccount(provider, { orderId, amount, customerName }) {
   const { webhookSecret, paymentKey, ...virtualAccount } = await provider.issueVirtualAccount({ orderId, amount, customerName });
   return { virtualAccount, payment: webhookSecret ? { webhookSecret, paymentKey: paymentKey || null } : null };
+}
+
+/** 환불 처리 일시(ISO 문자열·ms, 없으면 지금) → ms. 주문 전·미래는 거부 */
+function parseRefundedAt(value, { createdAt, nowMs }) {
+  if (value === undefined || value === null || value === '') return nowMs;
+  const ms = typeof value === 'number' ? value : Date.parse(String(value));
+  if (!Number.isFinite(ms) || ms < createdAt || ms > nowMs + REFUND_CLOCK_SKEW_MS) throw new Error('환불 처리 일시가 올바르지 않아요(주문 이후 ~ 지금 사이)');
+  return ms;
+}
+
+/** 환불 메모 → 앞뒤 공백·제어 문자를 뺀 문자열(200자까지) */
+function parseRefundMemo(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string') throw new Error('환불 메모는 글자로 적어 주세요');
+  const memo = Array.from(value, (c) => (c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f ? ' ' : c)).join('').trim();
+  if (memo.length > REFUND_MEMO_MAX) throw new Error(`환불 메모는 ${REFUND_MEMO_MAX}자까지예요`);
+  return memo;
 }
 
 function assertConsents(consents) {
@@ -219,7 +241,7 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
   function editAdvertiser(advId, { name: rawName, landingUrl: rawUrl, image } = {}) {
     const list = ordersOf(advId);
     if (list.length === 0) throw new Error('광고를 찾을 수 없습니다');
-    const editable = list.filter((o) => o.status !== ORDER_STATUS.REFUND_REQUIRED);
+    const editable = list.filter((o) => o.status !== ORDER_STATUS.REFUND_REQUIRED && o.status !== ORDER_STATUS.REFUNDED);
     if (editable.length === 0) throw new Error('환불 대상 광고는 고칠 수 없어요');
     const patch = {};
     if (rawName !== undefined) {
@@ -263,6 +285,22 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     return publicView(orders()[order.orderId]);
   }
 
+  /** 관리자 "환불 완료" 기록 — 주문 하나 단위(칸 추가 주문은 따로 돈을 냈으니 따로 돌려준다) */
+  function markRefunded(orderId, { refundedAt, memo } = {}) {
+    const order = Object.prototype.hasOwnProperty.call(orders(), orderId) ? orders()[orderId] : null;
+    if (!order) throw new Error('주문을 찾을 수 없습니다');
+    if (order.status === ORDER_STATUS.REFUNDED) throw new Error('이미 환불 완료된 주문입니다');
+    if (order.status !== ORDER_STATUS.REFUND_REQUIRED) throw new Error(`${order.status} 상태에서는 환불 완료 처리할 수 없습니다(환불 필요 주문만)`);
+    const updated = {
+      ...order,
+      status: ORDER_STATUS.REFUNDED,
+      refundedAt: parseRefundedAt(refundedAt, { createdAt: order.createdAt, nowMs: now() }),
+      refundMemo: parseRefundMemo(memo),
+    };
+    putOrder(updated);
+    return adminView(updated, store.read().reports);
+  }
+
   function report({ advId, reason, reporter }) {
     if (!REPORT_REASONS.has(reason)) throw new Error('신고 사유를 골라 주세요');
     const order = findByAdvertiser(advId);
@@ -279,12 +317,34 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     return { hidden: false };
   }
 
+  function adminView(o, reports) {
+    const r = reports[o.advertiserId] || { reporters: [] };
+    return { ...publicView(o), createdAt: o.createdAt, paidAt: o.paidAt, refundedAt: o.refundedAt || null, refundMemo: o.refundMemo || '', reports: r.reporters.length, rightsReport: Boolean(r.rights) };
+  }
+
+  const ordersByStatus = (status) => Object.values(orders())
+    .filter((o) => !status || o.status === status)
+    .sort((a, b) => b.createdAt - a.createdAt);
+
   function listAdvertisers(status) {
     const reports = store.read().reports;
-    return Object.values(orders())
-      .filter((o) => !status || o.status === status)
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .map((o) => ({ ...publicView(o), createdAt: o.createdAt, paidAt: o.paidAt, reports: (reports[o.advertiserId] || { reporters: [] }).reporters.length, rightsReport: Boolean((reports[o.advertiserId] || {}).rights) }));
+    return ordersByStatus(status).map((o) => adminView(o, reports));
+  }
+
+  /** CSV 내보내기용 — 허용한 필드만 골라 담는다(결제 secret·paymentKey·가상계좌는 처음부터 빠진다) */
+  function exportRows(status) {
+    return ordersByStatus(status).map((o) => ({
+      orderId: o.orderId,
+      name: o.name,
+      kind: o.kind,
+      slots: o.slots,
+      amount: o.amount,
+      status: o.status,
+      createdAt: o.createdAt,
+      paidAt: o.paidAt,
+      refundedAt: o.refundedAt || null,
+      refundMemo: o.refundMemo || '',
+    }));
   }
 
   return {
@@ -302,6 +362,8 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     editAdvertiser,
     report,
     listAdvertisers,
+    markRefunded,
+    exportRows,
     recordKill: stats.recordKill,
     recordRun: stats.recordRun,
     getKillRanking: stats.getKillRanking,
@@ -310,4 +372,4 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
   };
 }
 
-module.exports = { createOrderService, ORDER_STATUS, REPORT_HIDE_THRESHOLD, MAX_SLOTS_PER_ORDER };
+module.exports = { createOrderService, ORDER_STATUS, REPORT_HIDE_THRESHOLD, MAX_SLOTS_PER_ORDER, REFUND_MEMO_MAX };
