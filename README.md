@@ -113,8 +113,7 @@ podman build -t ad-dodge .
 # 로컬 모드(운영 모드 끔, 모의 결제). FREE_MODE·DEV_DEPOSIT 은 127.0.0.1 에만 열려서 컨테이너 밖에서 안 보인다 — 쓰지 말 것
 podman run -d --name ad-dodge-local -p 5180:8080   -e NODE_ENV=development -e ADMIN_TOKEN=local-admin-token-1234 -e WEBHOOK_SECRET=local-webhook-secret-1234 ad-dodge
 curl -i http://127.0.0.1:5180/api/health      # 200 {"ok":true}
-curl -o /dev/null -w '%{http_code}
-' http://127.0.0.1:5180/   # 200
+curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5180/   # 200
 podman stop ad-dodge-local                     # SIGTERM → 로그에 "장부를 디스크에 쓰고 종료합니다", 종료 코드 0
 podman rm -f ad-dodge-local && podman rmi ad-dodge
 ```
