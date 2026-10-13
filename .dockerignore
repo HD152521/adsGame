@@ -1,0 +1,16 @@
+# 이미지에 넣지 않는 것 — 테스트·로컬 장부·문서·로컬 실행 스크립트·배포 설정 파일
+**/*.test.js
+dom-stub.js
+data
+docs
+start-test.cmd
+node_modules
+.git
+.gitignore
+.vercelignore
+vercel.json
+.dockerignore
+Dockerfile
+fly.toml
+README.md
+*.log

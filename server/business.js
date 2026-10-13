@@ -9,8 +9,12 @@
 //   PAYMENT_PROVIDER=toss 인데 키가 없으면 결제가 안 되므로 운영이든 로컬이든 띄우지 않는다(server/payments.js).
 //   검수 설정(MODERATION_MODE·GOOGLE_VISION_API_KEY)도 늘 점검한다 — vision 인데 키가 없으면 띄우지 않고,
 //   auto-approve(전부 승인)는 운영 모드에서 띄우지 않는다(server/moderation.js checkModerationConfig).
+//   운영 비밀값·결제(계획서 Step 4): 운영 모드에서는
+//     · ADMIN_TOKEN 이 32자 미만이면 띄우지 않는다(로컬은 진입점에서 16자 규칙만)
+//     · 모의 결제(PAYMENT_PROVIDER 없음·mock)면 띄우지 않는다 — 모의 PG는 실제 입금을 받지 못하고 웹훅 비밀값 하나로 입금이 확정된다
+//   오류 문구에 비밀값 자체는 절대 넣지 않는다(로그로 새지 않게).
 
-const { checkPaymentConfig } = require('./payments.js');
+const { checkPaymentConfig, readPaymentConfig } = require('./payments.js');
 const { checkModerationConfig } = require('./moderation.js');
 
 const BUSINESS_FIELDS = [
@@ -27,6 +31,7 @@ const BUSINESS_FIELDS = [
 const FIELD_MAX_LENGTH = 200;
 const REG_NO_DIGITS = 10; // 사업자등록번호 000-00-00000
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PRODUCTION_ADMIN_TOKEN_MIN = 32;
 
 function isProductionMode(env) {
   return env.NODE_ENV === 'production';
@@ -48,6 +53,14 @@ function formatErrors(env, info) {
   return errors;
 }
 
+/** 운영 모드 전용 — 관리자 토큰 길이·모의 결제 금지 */
+function productionSecretErrors(env) {
+  const errors = [];
+  if (String(env.ADMIN_TOKEN || '').length < PRODUCTION_ADMIN_TOKEN_MIN) errors.push(`ADMIN_TOKEN 은 운영 모드에서 ${PRODUCTION_ADMIN_TOKEN_MIN}자 이상이어야 합니다(무작위 값 권장: openssl rand -hex 32).`);
+  if (readPaymentConfig(env).provider === 'mock') errors.push('운영 모드에서는 모의 결제(PAYMENT_PROVIDER=mock)를 쓸 수 없습니다 — PAYMENT_PROVIDER=toss 와 TOSS_SECRET_KEY 를 넣으세요.');
+  return errors;
+}
+
 /** 서버 시작 전 점검 → 문제 목록(비었으면 통과). 사업자 정보는 운영 모드에서만, 결제·검수 설정은 늘 점검 */
 function checkStartupConfig(env) {
   const production = isProductionMode(env);
@@ -55,7 +68,7 @@ function checkStartupConfig(env) {
   if (!production) return commonErrors;
   const info = readBusinessInfo(env);
   const missing = BUSINESS_FIELDS.filter((f) => f.required && !info[f.key]).map((f) => `${f.env} 환경변수가 필요합니다(사업자 정보 법정 표시).`);
-  return [...missing, ...formatErrors(env, info), ...commonErrors];
+  return [...missing, ...formatErrors(env, info), ...productionSecretErrors(env), ...commonErrors];
 }
 
 /** GET /api/business 응답 — 필수 값이 다 있어야 ready */
@@ -65,4 +78,4 @@ function publicBusinessInfo(info) {
   return { ready, ...Object.fromEntries(BUSINESS_FIELDS.map((f) => [f.key, safe[f.key] || ''])) };
 }
 
-module.exports = { BUSINESS_FIELDS, isProductionMode, readBusinessInfo, checkStartupConfig, publicBusinessInfo };
+module.exports = { BUSINESS_FIELDS, PRODUCTION_ADMIN_TOKEN_MIN, isProductionMode, readBusinessInfo, checkStartupConfig, publicBusinessInfo };

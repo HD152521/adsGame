@@ -46,8 +46,8 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 
 | 환경변수 | 설명 |
 |---|---|
-| `ADMIN_TOKEN` | 관리자 토큰 (필수, 16자+) |
-| `PAYMENT_PROVIDER` | `mock`(기본, 모의 PG) / `toss`(토스페이먼츠 가상계좌). 다른 값이면 시작 거부 |
+| `ADMIN_TOKEN` | 관리자 토큰 (필수, 16자+ · **운영 모드는 32자+**, 무작위 값: `openssl rand -hex 32`) |
+| `PAYMENT_PROVIDER` | `mock`(기본, 모의 PG) / `toss`(토스페이먼츠 가상계좌). 다른 값이면 시작 거부. **운영 모드에서 `mock`(또는 비움)이면 시작 거부** |
 | `WEBHOOK_SECRET` | 모의 PG 웹훅 서명 비밀값 (`PAYMENT_PROVIDER=mock`일 때 필수, 16자+) |
 | `TOSS_SECRET_KEY` | 토스페이먼츠 **시크릿 키**(`test_sk_…`/`live_sk_…`). `PAYMENT_PROVIDER=toss`일 때 필수 — 없거나 형식이 틀리면 시작 거부. 호스팅 비밀값으로만 넣는다 |
 | `TOSS_VA_BANK` | 가상계좌 은행 코드(선택, 기본 `20` 우리은행). 발급 가능 은행: 03·06·07·11·20·31·32·34·37·39·71·81·88 |
@@ -57,8 +57,9 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 | `GOOGLE_VISION_API_KEY` | `MODERATION_MODE=vision` 일 때 필수(없으면 시작 거부). 환경변수로만 넣고 로그에 찍지 않는다 |
 | `HOST` | 기본 `0.0.0.0`. `FREE_MODE`·`DEV_DEPOSIT`이면 늘 `127.0.0.1` |
 | `DATA_DIR` | 기본 `./data` (db.json + uploads/, git 제외) |
-| `TRUST_PROXY=1` | 리버스 프록시 뒤에서 X-Forwarded-For로 IP 판별 |
-| `NODE_ENV=production` | **운영 모드**. 아래 사업자 정보 필수 값이 비거나 형식이 틀리면, 또는 `FREE_MODE`·`DEV_DEPOSIT`이 켜져 있으면 서버가 시작을 거부한다 |
+| `TRUST_PROXY=1` | 리버스 프록시 **한 단** 뒤에서 X-Forwarded-For **마지막 값**으로 접속 IP 판별(레이트 리밋·신고자 구분). Fly.io는 프록시 한 단이라 `fly.toml`에 `1`로 들어 있다. 프록시 없이 직접 받을 때는 켜지 말 것(클라이언트가 IP를 위조할 수 있다) |
+| `NODE_ENV=production` | **운영 모드**(컨테이너 이미지 기본값). 아래 사업자 정보 필수 값이 비거나 형식이 틀리면, `FREE_MODE`·`DEV_DEPOSIT`이 켜져 있으면, `ADMIN_TOKEN`이 32자 미만이면, 모의 결제(`mock`)면 서버가 시작을 거부한다 |
+| `PORT` | 기본 `5173` (컨테이너는 `8080`) |
 | `BIZ_NAME` · `BIZ_OWNER` · `BIZ_REG_NO` · `BIZ_ADDRESS` · `BIZ_PHONE` · `BIZ_EMAIL` · `HOSTING_PROVIDER` | 사업자 정보(법정 표시) — 운영 모드 필수. `BIZ_REG_NO`는 000-00-00000, `BIZ_EMAIL`은 메일 형식 |
 | `BIZ_MAIL_ORDER_NO` | 통신판매업 신고번호 — 운영 모드에서도 선택(PG 구매안전서비스 확인증 뒤에 신고하므로). 비면 화면에 "신고 준비 중" |
 
@@ -92,6 +93,45 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 7. 개발자센터 웹훅 전송 기록에서 같은 이벤트 **재전송** → 200이 오고 장부 칸 수가 늘지 않는지(멱등) 확인
 8. 운영 키(`live_sk_…`)로 바꿀 때는 `NODE_ENV=production`과 함께 넣고, 첫 실결제는 소액으로 한 번 더 4~5를 확인한다
 
+## 배포 — 컨테이너·Fly.io (계획서 Step 4)
+파일 저장소(볼륨 위 `db.json` 하나)라 **단일 인스턴스 전용**이다. 머신을 2대 이상 띄우면 장부가 갈라진다 — 수평 확장 금지.
+
+| 파일 | 내용 |
+|---|---|
+| `Dockerfile` | `node:20-alpine`, 의존성 설치 없음, 코드는 root 소유(읽기 전용), `DATA_DIR=/data`, 포트 8080, 기본 `NODE_ENV=production` |
+| `server/container-entry.js` | 컨테이너 진입점 — root로 시작했으면 `/data` 주인만 node(uid 1000)로 바꾸고 **즉시 권한을 내려놓은 뒤** 서버를 띄운다(Fly 새 볼륨은 root 소유라서). 서버 코드는 root로 돌지 않는다 |
+| `.dockerignore` | 테스트(`*.test.js`)·`data/`·`docs/`·`start-test.cmd`·배포 설정 파일 제외 |
+| `fly.toml` | 앱 이름 placeholder(`ad-dodge-CHANGE-ME`), 볼륨 `/data`, 내부 포트 8080, `force_https`, 헬스체크 `GET /api/health`, 머신 1대 고정(자동 정지 끔), `TRUST_PROXY=1` |
+
+- **헬스체크** `GET /api/health` — 장부(`db.json`)를 실제로 읽고 JSON으로 풀 수 있으면 `200 {"ok":true}`, 못 읽으면(깨짐·볼륨 없음) `503 {"ok":false}`. 장부가 아직 없으면(첫 주문 전) 데이터 폴더 접근만 본다. 응답에 경로·비밀값 없음, 원인은 서버 로그 `[health]`에만. 인증 없이 열려 있고 매번 장부를 읽으므로 IP별 분당 30회 리밋(넘으면 429) — fly 탐침(15초 간격, 분당 4회)에는 넉넉하다.
+- **종료** — SIGTERM(배포·재시작)·SIGINT를 받으면 모아 두던 놀이 기록(lazy 쓰기)을 디스크에 쓰고 코드 0으로 끝난다(`server/shutdown.js`). `fly.toml`의 `kill_signal`·`kill_timeout` 참고.
+
+### 컨테이너 로컬 확인 (podman — docker도 같은 명령)
+```bash
+cd apps/ad-dodge
+podman build -t ad-dodge .
+# 로컬 모드(운영 모드 끔, 모의 결제). FREE_MODE·DEV_DEPOSIT 은 127.0.0.1 에만 열려서 컨테이너 밖에서 안 보인다 — 쓰지 말 것
+podman run -d --name ad-dodge-local -p 5180:8080   -e NODE_ENV=development -e ADMIN_TOKEN=local-admin-token-1234 -e WEBHOOK_SECRET=local-webhook-secret-1234 ad-dodge
+curl -i http://127.0.0.1:5180/api/health      # 200 {"ok":true}
+curl -o /dev/null -w '%{http_code}
+' http://127.0.0.1:5180/   # 200
+podman stop ad-dodge-local                     # SIGTERM → 로그에 "장부를 디스크에 쓰고 종료합니다", 종료 코드 0
+podman rm -f ad-dodge-local && podman rmi ad-dodge
+```
+Windows의 podman(WSL)에서 `127.0.0.1:5180`이 빈 응답이면 포트 중계(wslrelay) 문제다 — `podman machine ssh "ip -4 addr show eth0"`로 VM IP를 얻어 `http://{VM IP}:5180`으로 확인한다.
+
+### Fly.io 배포 절차 (사람이 — 계정·결제 수단 필요)
+1. `fly auth login` → `fly.toml`의 `app` 이름을 정해 바꾸고 `fly apps create {이름}`
+2. 볼륨 하나: `fly volumes create ad_dodge_data --region nrt --size 1` (머신 1대 = 볼륨 1개)
+3. 비밀값은 `fly secrets set`으로만(파일·코드에 적지 않는다):
+   `fly secrets set ADMIN_TOKEN=$(openssl rand -hex 32) TOSS_SECRET_KEY=live_sk_… BIZ_NAME=… BIZ_OWNER=… BIZ_REG_NO=… BIZ_ADDRESS=… BIZ_PHONE=… BIZ_EMAIL=…`
+   (선택) `BIZ_MAIL_ORDER_NO`, `TOSS_VA_BANK`, `MODERATION_MODE=vision` + `GOOGLE_VISION_API_KEY`
+4. `fly deploy` → `fly logs`에서 `운영모드=켜짐, 결제=toss` 확인. 설정이 빠졌으면 `[config] …` 줄을 남기고 시작을 거부한다
+5. `fly scale count 1` 로 1대 고정 확인(`fly status`). 절대 2대 이상으로 늘리지 않는다
+6. `https://{이름}.fly.dev/api/health` → 200, `http://`로 열면 https로 넘어가는지 확인
+7. 토스 개발자센터 웹훅 주소를 `https://{도메인}/api/payments/webhook`으로 등록(위 결제 절차)
+8. 백업: 볼륨 안 `/data/backups/`에 1시간마다 쌓인다. 볼륨 스냅샷(`fly volumes snapshots list`)도 켜져 있는지 확인. 복구는 `fly ssh console`로 `/data/db.json`을 백업본으로 바꾸고 `fly machine restart`
+
 ## Vercel (정적 미리보기)
 Vercel은 서버리스라 `server/`(장부 파일·업로드·SSE)가 돌지 않는다. 올리면 **게임만** 동작하고(관리사무소 광고만 날아옴),
 광고 구매는 "게시판 공사 중"으로 꺼진다. 실서비스는 영구 디스크가 있는 Node 호스팅(계획서 Step 4: Fly.io)에서.
@@ -119,14 +159,17 @@ Vercel은 서버리스라 `server/`(장부 파일·업로드·SSE)가 돌지 않
 | `server/app.js` | HTTP 라우팅·레이트 리밋·관리자 인증·정적 파일(허용 목록) |
 | `server/stats.js` | 판 기록·오늘 백분위·도전장·광고 성과·킬 순위(위조 가능한 값이라 범위·상한으로 묶음) |
 | `server/backup.js` | 장부 주기 백업 |
-| `server/business.js` | 사업자 정보 환경변수 읽기·운영 모드 시작 점검 |
+| `server/business.js` | 사업자 정보 환경변수 읽기·운영 모드 시작 점검(관리자 토큰 32자·모의 결제 금지 포함) |
+| `server/health.js` | 헬스체크(`/api/health`) — 장부 읽기 가능 여부 |
+| `server/shutdown.js` | SIGTERM·SIGINT → lazy 쓰기 flush 후 종료 |
+| `server/container-entry.js` | 컨테이너 진입점 — 볼륨 주인 넘기고 비root로 강등 |
 | `sound.js` | 종이 소리 합성·음소거 |
 
 ## 실제 운영 전에 바꿀 것
 1. **실제 PG 연결 확인** — 토스페이먼츠 provider는 구현됨(`PAYMENT_PROVIDER=toss`). PG 계약·키 발급 후 위 "실제 연결 확인 절차"대로 확인. 환불(취소)은 아직 관리자 수동
 2. **이미지 자동 필터** — 외부 AI 필터 키로 `classify()` 구현(선정성·폭력·얼굴). 없으면 관리자 수동 승인
 3. 사업자 정보 환경변수(`BIZ_*`·`HOSTING_PROVIDER`)를 호스팅 비밀값으로 넣고 `NODE_ENV=production`으로 띄우기. `privacy.html`의 PG사 이름 채우기
-4. 호스팅 — 파일 저장소를 쓰므로 영구 디스크가 있는 단일 Node 인스턴스 (서버리스 불가)
+4. 호스팅 — 파일 저장소를 쓰므로 영구 디스크가 있는 단일 Node 인스턴스 (서버리스 불가). 구성은 끝남(`Dockerfile`·`fly.toml`) — 위 "Fly.io 배포 절차"대로 사람이 계정을 만들어 배포
 
 ## 난이도 튜닝
 `game.js` 상단 상수. 0~40초는 빠르게 오르고, 이후 "연장전"에서 속도·등장 간격·동시 개수가 천천히 계속 올라 상한(SPEED_CAP·SPAWN_INTERVAL_FLOOR·MAX_PROJECTILES_CAP)에서 멈춘다.

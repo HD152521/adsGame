@@ -2,6 +2,7 @@
 //   createApp(config) → { server, service, provider, close } (테스트는 포트 0에 띄운다)
 //
 // 공개 API
+//   GET  /api/health                 헬스체크 — 장부를 읽을 수 있으면 200 { ok:true }, 아니면 503 { ok:false } (server/health.js). IP별 분당 30회 리밋
 //   GET  /api/config                 클라이언트 설정(모의 입금 버튼 노출 여부)
 //   GET  /api/business               사업자 정보(법정 표시, 환경변수) — 필수 값이 비면 ready=false
 //   GET  /api/ledger                 장부·지분·보스·공개 규칙
@@ -32,9 +33,10 @@ const { createEventHub, createRateLimiter } = require('./realtime.js');
 const { HttpError, readBody, parseJson, sendJson, serveStatic } = require('./http-util.js');
 const { SEED_LEDGER } = require('../seed-ledger.js');
 const { publicBusinessInfo } = require('./business.js');
+const { checkLedger } = require('./health.js');
 
 const APP_ROOT = path.join(__dirname, '..');
-const DEFAULT_LIMITS = { orders: 5, kills: 60, reports: 10, challenges: 10, runs: 15, windowMs: 60_000 };
+const DEFAULT_LIMITS = { orders: 5, kills: 60, reports: 10, challenges: 10, runs: 15, health: 30, windowMs: 60_000 };
 const VISIT_DEDUP_MAX = 50_000; // 하루치 (IP·광고) 쌍 기억 상한 — 넘치면 비우고 다시
 
 // TRUST_PROXY=1 은 "앞단에 신뢰하는 프록시가 정확히 한 단" 있다는 뜻이다. 프록시는 X-Forwarded-For 끝에
@@ -86,6 +88,9 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     challenges: createRateLimiter({ limit: limits.challenges || DEFAULT_LIMITS.challenges, windowMs: limits.windowMs, now }),
     // 한 판은 최소 몇 초 — 분당 15판 넘게 보고하면 사람이 아니다(광고 성과 부풀리기 방어, 리뷰 M1)
     runs: createRateLimiter({ limit: limits.runs || DEFAULT_LIMITS.runs, windowMs: limits.windowMs, now }),
+    // 헬스체크는 인증 없이 매번 장부 전체를 읽는다 — 마구 두드려 디스크 I/O 를 짜내지 못하게(리뷰 M).
+    // fly 탐침은 15초 간격(분당 4회)이라 분당 30회면 넉넉하다
+    health: createRateLimiter({ limit: limits.health || DEFAULT_LIMITS.health, windowMs: limits.windowMs, now }),
   };
   // 사이트 이동은 같은 사람·같은 광고 하루 한 번만 센다(클라이언트 보고값이라 반복 보고로 부풀릴 수 있음)
   let visitDay = '';
@@ -172,6 +177,12 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     if (parts[0] === 'admin') return handleAdmin(req, res, url, parts);
 
     switch (key) {
+      case 'GET health': {
+        limit(req, 'health');
+        const health = await checkLedger(dataDir);
+        if (!health.ok) console.error('[health]', health.reason);
+        return sendJson(res, health.ok ? 200 : 503, health.ok ? { ok: true } : { ok: false, error: '장부를 읽을 수 없습니다' });
+      }
       case 'GET config':
         return sendJson(res, 200, { devDeposit: devMode, freeMode, provider: provider.name });
       case 'GET business':

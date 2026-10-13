@@ -4,7 +4,7 @@
 //   PORT              기본 5173
 //   HOST              기본 0.0.0.0 (FREE_MODE·DEV_DEPOSIT 이면 늘 127.0.0.1)
 //   DATA_DIR          기본 ./data (db.json + uploads/) — git에 올리지 않는다
-//   ADMIN_TOKEN       관리자 페이지 토큰(필수, 16자 이상)
+//   ADMIN_TOKEN       관리자 페이지 토큰(필수, 16자 이상 — 운영 모드는 32자 이상)
 //   PAYMENT_PROVIDER  mock(기본) | toss — 결제 제공자(server/payments.js)
 //   WEBHOOK_SECRET    모의 PG 웹훅 서명 비밀값(PAYMENT_PROVIDER=mock 일 때 필수)
 //   TOSS_SECRET_KEY   토스페이먼츠 시크릿 키 test_sk_… / live_sk_… (PAYMENT_PROVIDER=toss 일 때 필수)
@@ -13,8 +13,11 @@
 //   DEV_DEPOSIT=1     "입금 시뮬레이션" 버튼·엔드포인트 켜기(로컬 전용 — 운영에서 켜면 공짜 광고가 된다)
 //   MODERATION_MODE   review-all(기본) | vision(Google Vision SafeSearch + 얼굴 감지) | auto-approve(로컬 데모 전용 — 운영 모드 금지)
 //   GOOGLE_VISION_API_KEY  Google Cloud Vision API 키(MODERATION_MODE=vision 일 때 필수, 로그에 찍지 않는다)
-//   TRUST_PROXY=1     리버스 프록시 뒤에서 X-Forwarded-For로 IP 판별
-//   NODE_ENV=production  운영 모드 — 사업자 정보(BIZ_*·HOSTING_PROVIDER) 필수, FREE_MODE·DEV_DEPOSIT 금지(server/business.js)
+//   TRUST_PROXY=1     리버스 프록시(fly 등) 한 단 뒤에서 X-Forwarded-For 마지막 값으로 IP 판별(fly.toml 기본 1)
+//   NODE_ENV=production  운영 모드 — 사업자 정보(BIZ_*·HOSTING_PROVIDER) 필수, FREE_MODE·DEV_DEPOSIT 금지,
+//                     ADMIN_TOKEN 32자 이상, 모의 결제(mock) 금지(server/business.js)
+//   종료: SIGTERM·SIGINT 를 받으면 밀린 lazy 쓰기를 디스크에 쓰고 끝낸다(server/shutdown.js)
+//   컨테이너에서는 server/container-entry.js 가 권한을 내려놓은 뒤 이 파일을 부른다(Dockerfile)
 //   BIZ_NAME · BIZ_OWNER · BIZ_REG_NO · BIZ_ADDRESS · BIZ_PHONE · BIZ_EMAIL · BIZ_MAIL_ORDER_NO · HOSTING_PROVIDER
 //                     사업자 정보 — 시작 화면·신청서·약관·개인정보처리방침 하단에 표시
 
@@ -24,6 +27,7 @@ const { startBackups } = require('./backup.js');
 const M = require('./moderation.js');
 const { checkStartupConfig, readBusinessInfo, isProductionMode } = require('./business.js');
 const { readPaymentConfig } = require('./payments.js');
+const { installShutdown } = require('./shutdown.js');
 
 const MIN_SECRET_LENGTH = 16;
 
@@ -45,7 +49,6 @@ if (startupErrors.length > 0) {
   process.exit(1);
 }
 const payment = readPaymentConfig(process.env);
-if (isProductionMode(process.env) && payment.provider === 'mock') console.warn('[config] ⚠ 운영 모드인데 PAYMENT_PROVIDER=mock — 실제 입금을 받을 수 없습니다.');
 if (payment.provider === 'toss' && payment.tossSecretKey.startsWith('test_')) console.warn('[config] 토스 테스트 키(test_sk_) — 실제 돈은 오가지 않습니다.');
 
 const port = Number(process.env.PORT || 5173);
@@ -75,13 +78,8 @@ const app = createApp({
 startBackups({ dataDir }); // 1시간마다 data/backups/ 에 장부 사본(이틀치 보관)
 
 app.server.listen(port, host, () => {
-  console.info(`[server] http://${devMode || freeMode ? "127.0.0.1" : "localhost"}:${port}  (운영모드=${isProductionMode(process.env) ? '켜짐' : '꺼짐'}, 테스트모드=${freeMode ? '켜짐' : '꺼짐'}, 결제=${payment.provider}, 모의입금=${devMode && payment.provider === 'mock' ? '켜짐' : '꺼짐'}, 검수=${moderationMode})`);
+  console.info(`[server] http://${devMode || freeMode ? "127.0.0.1" : "localhost"}:${app.server.address().port}  (운영모드=${isProductionMode(process.env) ? '켜짐' : '꺼짐'}, 테스트모드=${freeMode ? '켜짐' : '꺼짐'}, 결제=${payment.provider}, 모의입금=${devMode && payment.provider === 'mock' ? '켜짐' : '꺼짐'}, 검수=${moderationMode})`);
   console.info(`[server] 관리자: /admin.html`);
 });
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    app.close(); // 밀린 놀이 기록(lazy)도 여기서 디스크에 쓴다
-    process.exit(0);
-  });
-}
+installShutdown({ app }); // SIGTERM·SIGINT → 밀린 놀이 기록(lazy)을 디스크에 쓰고 종료

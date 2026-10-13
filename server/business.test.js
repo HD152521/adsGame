@@ -1,5 +1,6 @@
 // 사업자 정보(법정 표시) — 환경변수 읽기, 운영 모드 시작 거부, GET /api/business.
-//   운영 모드 = NODE_ENV=production. 이때 필수 값이 비거나 FREE_MODE·DEV_DEPOSIT이 켜져 있으면 서버가 뜨지 않는다.
+//   운영 모드 = NODE_ENV=production. 이때 필수 값이 비거나 FREE_MODE·DEV_DEPOSIT이 켜져 있거나,
+//   관리자 토큰이 32자 미만이거나 모의 결제(PAYMENT_PROVIDER=mock)면 서버가 뜨지 않는다.
 //   실제 서버 진입점(server/index.js)을 자식 프로세스로 띄워 "시작 거부/시작됨"을 확인한다.
 //   실행: apps/ad-dodge 안에서 node --test
 const { test } = require('node:test');
@@ -24,6 +25,10 @@ const FULL_ENV = {
   HOSTING_PROVIDER: 'Fly.io',
 };
 
+// 운영 모드로 뜰 수 있는 최소 설정 — 사업자 정보 + 32자 이상 관리자 토큰 + 실제 PG(토스). 모의 결제는 운영 금지
+const PROD_ADMIN_TOKEN = 'prod-admin-token-0123456789abcdef'; // 33자
+const PROD_READY = { ...FULL_ENV, NODE_ENV: 'production', ADMIN_TOKEN: PROD_ADMIN_TOKEN, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'live_sk_fakeKeyForStartupTest00' };
+
 test('readBusinessInfo: 환경변수 8개를 앞뒤 공백 없이 읽는다(없으면 빈 문자열)', () => {
   const info = B.readBusinessInfo({ ...FULL_ENV, BIZ_NAME: '  주간실험실  ' });
   assert.equal(info.name, '주간실험실');
@@ -44,18 +49,18 @@ test('checkStartupConfig: 로컬(운영 아님)은 사업자 정보가 비어도
 });
 
 test('checkStartupConfig: 운영 모드에서 필수 값이 비면 이름을 짚어 거부', () => {
-  const errors = B.checkStartupConfig({ ...FULL_ENV, NODE_ENV: 'production', BIZ_REG_NO: '', BIZ_EMAIL: ' ' });
+  const errors = B.checkStartupConfig({ ...PROD_READY, BIZ_REG_NO: '', BIZ_EMAIL: ' ' });
   assert.ok(errors.some((e) => e.includes('BIZ_REG_NO')));
   assert.ok(errors.some((e) => e.includes('BIZ_EMAIL')));
-  assert.deepEqual(B.checkStartupConfig({ ...FULL_ENV, NODE_ENV: 'production' }), []);
+  assert.deepEqual(B.checkStartupConfig({ ...PROD_READY }), []);
 });
 
 test('checkStartupConfig: 통신판매업 신고번호는 신고 전이라 비어도 운영 시작 가능(PG 심사용 사이트가 먼저 떠야 함)', () => {
-  assert.deepEqual(B.checkStartupConfig({ ...FULL_ENV, NODE_ENV: 'production', BIZ_MAIL_ORDER_NO: '' }), []);
+  assert.deepEqual(B.checkStartupConfig({ ...PROD_READY, BIZ_MAIL_ORDER_NO: '' }), []);
 });
 
 test('checkStartupConfig: 운영 모드에서 형식이 틀린 등록번호·이메일, 켜진 FREE_MODE·DEV_DEPOSIT 거부', () => {
-  const prod = { ...FULL_ENV, NODE_ENV: 'production' };
+  const prod = { ...PROD_READY };
   assert.ok(B.checkStartupConfig({ ...prod, BIZ_REG_NO: '12-34' }).some((e) => e.includes('BIZ_REG_NO')));
   assert.ok(B.checkStartupConfig({ ...prod, BIZ_EMAIL: 'not-mail' }).some((e) => e.includes('BIZ_EMAIL')));
   assert.ok(B.checkStartupConfig({ ...prod, FREE_MODE: '1' }).some((e) => e.includes('FREE_MODE')));
@@ -63,8 +68,8 @@ test('checkStartupConfig: 운영 모드에서 형식이 틀린 등록번호·이
 });
 
 test('checkStartupConfig: 운영 모드에서 PAYMENT_PROVIDER=toss 인데 TOSS_SECRET_KEY 가 없으면 거부', () => {
-  const prod = { ...FULL_ENV, NODE_ENV: 'production' };
-  assert.ok(B.checkStartupConfig({ ...prod, PAYMENT_PROVIDER: 'toss' }).some((e) => e.includes('TOSS_SECRET_KEY')));
+  const prod = { ...PROD_READY };
+  assert.ok(B.checkStartupConfig({ ...prod, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: '' }).some((e) => e.includes('TOSS_SECRET_KEY')));
   assert.ok(B.checkStartupConfig({ ...prod, PAYMENT_PROVIDER: 'nope' }).some((e) => e.includes('PAYMENT_PROVIDER')));
   assert.deepEqual(B.checkStartupConfig({ ...prod, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'live_sk_fake' }), []);
 });
@@ -77,13 +82,13 @@ test('publicBusinessInfo: 필수 값이 다 있어야 ready, 비면 ready=false'
 });
 
 test('checkStartupConfig: 운영 모드에서 MODERATION_MODE=vision 인데 GOOGLE_VISION_API_KEY 가 없으면 거부', () => {
-  const prod = { ...FULL_ENV, NODE_ENV: 'production' };
+  const prod = { ...PROD_READY };
   assert.ok(B.checkStartupConfig({ ...prod, MODERATION_MODE: 'vision' }).some((e) => e.includes('GOOGLE_VISION_API_KEY')));
   assert.deepEqual(B.checkStartupConfig({ ...prod, MODERATION_MODE: 'vision', GOOGLE_VISION_API_KEY: 'AIzaFAKE-entry-key' }), []);
 });
 
 test('checkStartupConfig: 운영 모드에서 MODERATION_MODE=auto-approve 는 거부, 로컬에서는 허용', () => {
-  assert.ok(B.checkStartupConfig({ ...FULL_ENV, NODE_ENV: 'production', MODERATION_MODE: 'auto-approve' }).some((e) => e.includes('auto-approve')));
+  assert.ok(B.checkStartupConfig({ ...PROD_READY, MODERATION_MODE: 'auto-approve' }).some((e) => e.includes('auto-approve')));
   assert.deepEqual(B.checkStartupConfig({ MODERATION_MODE: 'auto-approve', FREE_MODE: '1' }), []);
 });
 
@@ -157,7 +162,7 @@ test('[진입점] 운영 모드(NODE_ENV=production)에서 사업자 정보가 �
 });
 
 test('[진입점] 운영 모드에서 사업자 정보가 다 있으면 시작된다', async () => {
-  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV });
+  const r = await runEntry({ ...PROD_READY });
   assert.equal(r.started, true, r.output);
 });
 
@@ -167,27 +172,27 @@ test('[진입점] 로컬 테스트 모드(start-test.cmd 와 같은 FREE_MODE=1)
 });
 
 test('[진입점] 운영 모드에서 PAYMENT_PROVIDER=toss 인데 TOSS_SECRET_KEY 가 없으면 시작을 거부한다', async () => {
-  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, PAYMENT_PROVIDER: 'toss' });
+  const r = await runEntry({ ...PROD_READY, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: '' });
   assert.equal(r.started, false, r.output);
   assert.notEqual(r.code, 0);
   assert.match(r.output, /TOSS_SECRET_KEY/);
 });
 
 test('[진입점] 운영 모드 + 토스 키가 있으면 시작된다(시작 시 PG 호출 없음, WEBHOOK_SECRET 불필요)', async () => {
-  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'test_sk_fakeKeyForEntryTest0000', WEBHOOK_SECRET: '' });
+  const r = await runEntry({ ...PROD_READY, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'test_sk_fakeKeyForEntryTest0000', WEBHOOK_SECRET: '' });
   assert.equal(r.started, true, r.output);
   assert.match(r.output, /결제=toss/);
 });
 
 test('[진입점] 운영 모드에서 MODERATION_MODE=vision 인데 GOOGLE_VISION_API_KEY 가 없으면 시작을 거부한다', async () => {
-  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, MODERATION_MODE: 'vision' });
+  const r = await runEntry({ ...PROD_READY, MODERATION_MODE: 'vision' });
   assert.equal(r.started, false, r.output);
   assert.notEqual(r.code, 0);
   assert.match(r.output, /GOOGLE_VISION_API_KEY/);
 });
 
 test('[진입점] 운영 모드에서 MODERATION_MODE=auto-approve 면 시작을 거부한다', async () => {
-  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, MODERATION_MODE: 'auto-approve' });
+  const r = await runEntry({ ...PROD_READY, MODERATION_MODE: 'auto-approve' });
   assert.equal(r.started, false, r.output);
   assert.notEqual(r.code, 0);
   assert.match(r.output, /auto-approve/);
@@ -195,8 +200,60 @@ test('[진입점] 운영 모드에서 MODERATION_MODE=auto-approve 면 시작을
 
 test('[진입점] 운영 모드 + vision 키가 있으면 시작된다(시작 시 Vision 호출 없음, 키는 로그에 안 나옴)', async () => {
   const key = 'AIzaFAKE-entry-key-should-not-leak';
-  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, MODERATION_MODE: 'vision', GOOGLE_VISION_API_KEY: key });
+  const r = await runEntry({ ...PROD_READY, MODERATION_MODE: 'vision', GOOGLE_VISION_API_KEY: key });
   assert.equal(r.started, true, r.output);
   assert.match(r.output, /검수=vision/);
   assert.ok(!r.output.includes(key));
+});
+
+// ── Step 4: 운영 필수 비밀값·결제 설정 ─────────────────────────────────────────
+test('checkStartupConfig: 운영 모드에서 ADMIN_TOKEN 이 32자 미만이면 거부(값은 메시지에 안 나옴)', () => {
+  const short = 'short-admin-token-31-characters';
+  assert.equal(short.length, 31);
+  const errors = B.checkStartupConfig({ ...PROD_READY, ADMIN_TOKEN: short });
+  assert.ok(errors.some((e) => e.includes('ADMIN_TOKEN') && e.includes('32')), errors.join(' / '));
+  assert.ok(errors.every((e) => !e.includes(short)));
+  assert.ok(B.checkStartupConfig({ ...PROD_READY, ADMIN_TOKEN: '' }).some((e) => e.includes('ADMIN_TOKEN')));
+  assert.deepEqual(B.checkStartupConfig({ ...PROD_READY, ADMIN_TOKEN: 'x'.repeat(32) }), []);
+});
+
+test('checkStartupConfig: 로컬은 ADMIN_TOKEN 32자 규칙을 적용하지 않는다(16자 규칙은 진입점에서)', () => {
+  assert.deepEqual(B.checkStartupConfig({ ADMIN_TOKEN: 'local-admin-token-1234' }), []);
+});
+
+test('checkStartupConfig: 운영 모드에서 모의 결제(PAYMENT_PROVIDER 없음·mock)는 거부', () => {
+  const { PAYMENT_PROVIDER, TOSS_SECRET_KEY, ...noProvider } = PROD_READY;
+  assert.ok(B.checkStartupConfig(noProvider).some((e) => e.includes('mock')));
+  assert.ok(B.checkStartupConfig({ ...PROD_READY, PAYMENT_PROVIDER: 'mock', WEBHOOK_SECRET: 'w'.repeat(32) }).some((e) => e.includes('mock')));
+  assert.deepEqual(B.checkStartupConfig({ PAYMENT_PROVIDER: 'mock' }), [], '로컬은 모의 결제 허용');
+});
+
+test('[진입점] 운영 모드에서 DEV_DEPOSIT=1 이면 시작을 거부한다', async () => {
+  const r = await runEntry({ ...PROD_READY, DEV_DEPOSIT: '1' });
+  assert.equal(r.started, false, r.output);
+  assert.notEqual(r.code, 0);
+  assert.match(r.output, /DEV_DEPOSIT/);
+});
+
+test('[진입점] 운영 모드에서 FREE_MODE=1 이면 시작을 거부한다', async () => {
+  const r = await runEntry({ ...PROD_READY, FREE_MODE: '1' });
+  assert.equal(r.started, false, r.output);
+  assert.notEqual(r.code, 0);
+  assert.match(r.output, /FREE_MODE/);
+});
+
+test('[진입점] 운영 모드에서 모의 결제(PAYMENT_PROVIDER=mock)면 시작을 거부한다', async () => {
+  const r = await runEntry({ ...PROD_READY, PAYMENT_PROVIDER: 'mock', TOSS_SECRET_KEY: '', WEBHOOK_SECRET: 'local-webhook-secret-1234' });
+  assert.equal(r.started, false, r.output);
+  assert.notEqual(r.code, 0);
+  assert.match(r.output, /mock/);
+});
+
+test('[진입점] 운영 모드에서 ADMIN_TOKEN 이 32자 미만이면 시작을 거부한다(토큰 값은 로그에 안 나옴)', async () => {
+  const short = 'local-admin-token-1234';
+  const r = await runEntry({ ...PROD_READY, ADMIN_TOKEN: short });
+  assert.equal(r.started, false, r.output);
+  assert.notEqual(r.code, 0);
+  assert.match(r.output, /ADMIN_TOKEN/);
+  assert.ok(!r.output.includes(short));
 });
