@@ -12,6 +12,7 @@
 //   - 장부 = ACTIVE 주문(하나도 없을 때만 하우스 광고). 확정되지 않은 돈은 확률에 영향을 주지 않는다
 //   - 같은 웹훅이 두 번 와도 한 번만 반영, 금액이 다르면 반영하지 않는다
 //   - orderId는 추측 불가능한 비밀 토큰(주문 조회 권한), advertiserId는 공개 id — 둘을 섞지 않는다
+//   - PG 웹훅 검증값(payment.webhookSecret)·paymentKey는 주문에만 저장하고 공개 응답(publicView)에 넣지 않는다
 
 const crypto = require('node:crypto');
 const { SLOT_PRICE, MAX_SLOTS, computeShares, findBossId, SNIPE_RATE } = require('../shares.js');
@@ -32,6 +33,12 @@ const REPORT_REASONS = new Set(['rights', 'obscene', 'hate', 'other']);
 const KINDS = new Set(['logo', 'snipe']);
 
 const randomId = (bytes) => crypto.randomBytes(bytes).toString('hex');
+
+/** PG에 가상계좌를 받는다 → { virtualAccount(공개), payment(비공개: 웹훅 검증값·결제 키) } */
+async function issueAccount(provider, { orderId, amount, customerName }) {
+  const { webhookSecret, paymentKey, ...virtualAccount } = await provider.issueVirtualAccount({ orderId, amount, customerName });
+  return { virtualAccount, payment: webhookSecret ? { webhookSecret, paymentKey: paymentKey || null } : null };
+}
 
 function assertConsents(consents) {
   const c = consents || {};
@@ -124,6 +131,8 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     const orderId = randomId(16);
     const advertiserId = randomId(6);
     const amount = slots * SLOT_PRICE;
+    // 계좌를 먼저 받는다 — PG가 실패하면 이미지도 저장하지 않고 주문도 남기지 않는다
+    const { virtualAccount, payment } = await issueAccount(provider, { orderId, amount, customerName: name });
     const order = {
       orderId,
       advertiserId,
@@ -135,7 +144,8 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
       review: verdict === 'review',
       logoUrl: decoded ? saveImage(advertiserId, decoded) : null,
       landingUrl: landing.url,
-      virtualAccount: provider.issueVirtualAccount({ orderId, amount }),
+      virtualAccount,
+      payment,
       createdAt: now(),
       paidAt: null,
     };
@@ -145,7 +155,7 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
   }
 
   /** 칸 추가: 붙어 있는 내 광고(orderId = 소유 증명)에 칸만 더한다. 이미 검수된 내용이라 다시 검수하지 않는다 */
-  function createTopup(parentOrderId, { slots, consents }) {
+  async function createTopup(parentOrderId, { slots, consents }) {
     const parent = orders()[parentOrderId];
     if (!parent) throw new Error('주문을 찾을 수 없습니다');
     if (parent.status !== ORDER_STATUS.ACTIVE) throw new Error('붙어 있는 광고에만 칸을 더할 수 있어요');
@@ -154,6 +164,7 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     if (soldSlots() + slots > MAX_SLOTS) throw new Error('남은 칸보다 많이 살 수 없어요');
     const orderId = randomId(16);
     const amount = slots * SLOT_PRICE;
+    const { virtualAccount, payment } = await issueAccount(provider, { orderId, amount, customerName: parent.name });
     const order = {
       ...parent,
       orderId,
@@ -162,7 +173,8 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
       amount,
       status: ORDER_STATUS.AWAITING_DEPOSIT,
       review: false,
-      virtualAccount: provider.issueVirtualAccount({ orderId, amount }),
+      virtualAccount,
+      payment, // 부모 주문의 검증값을 물려받지 않는다 — 주문마다 PG가 따로 준다
       createdAt: now(),
       paidAt: null,
     };
@@ -280,6 +292,11 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     createTopup,
     confirmDeposit,
     getOrder: (orderId) => publicView(orders()[orderId]),
+    /** PG 웹훅 검증용 — 발급 때 저장한 secret(없으면 null). 공개 API로 내보내지 않는다 */
+    getWebhookSecret: (orderId) => {
+      const o = Object.prototype.hasOwnProperty.call(orders(), orderId) ? orders()[orderId] : null;
+      return (o && o.payment && o.payment.webhookSecret) || null;
+    },
     getLedger,
     adminAction,
     editAdvertiser,

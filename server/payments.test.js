@@ -36,3 +36,29 @@ test('verifyWebhook: 서명이 없거나 틀리면 거부(위조 입금 방지)'
   assert.throws(() => p.verifyWebhook({ 'x-mock-signature': 'deadbeef' }, raw), /서명/);
   assert.throws(() => p.verifyWebhook({ 'x-mock-signature': p.sign(raw) }, raw.replace('5000', '9000')), /서명/);
 });
+
+// ── 제공자 선택(PAYMENT_PROVIDER=toss|mock) ─────────────────────────────────
+const { readPaymentConfig, checkPaymentConfig, createPaymentProvider } = require('./payments.js');
+
+test('readPaymentConfig: 기본은 mock, PAYMENT_PROVIDER·TOSS_* 를 환경변수에서만 읽는다', () => {
+  assert.deepEqual(readPaymentConfig({}), { provider: 'mock', tossSecretKey: '', tossBank: '' });
+  assert.deepEqual(readPaymentConfig({ PAYMENT_PROVIDER: ' Toss ', TOSS_SECRET_KEY: 'test_sk_abc', TOSS_VA_BANK: '88' }), { provider: 'toss', tossSecretKey: 'test_sk_abc', tossBank: '88' });
+});
+
+test('checkPaymentConfig: 모르는 제공자·토스 키 누락/형식 오류·가상계좌 불가 은행은 거부', () => {
+  assert.deepEqual(checkPaymentConfig({}), []);
+  assert.deepEqual(checkPaymentConfig({ PAYMENT_PROVIDER: 'mock' }), []);
+  assert.ok(checkPaymentConfig({ PAYMENT_PROVIDER: 'paypal' }).some((e) => e.includes('PAYMENT_PROVIDER')));
+  assert.ok(checkPaymentConfig({ PAYMENT_PROVIDER: 'toss' }).some((e) => e.includes('TOSS_SECRET_KEY')));
+  assert.ok(checkPaymentConfig({ PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'test_ck_client' }).some((e) => e.includes('TOSS_SECRET_KEY')));
+  assert.ok(checkPaymentConfig({ PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'live_sk_abc', TOSS_VA_BANK: '90' }).some((e) => e.includes('TOSS_VA_BANK')));
+  assert.deepEqual(checkPaymentConfig({ PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'live_sk_abc' }), []);
+});
+
+test('createPaymentProvider: 설정대로 mock / toss 를 고른다', () => {
+  assert.equal(createPaymentProvider({ provider: 'mock', webhookSecret: 'x' }).name, 'mock');
+  const toss = createPaymentProvider({ provider: 'toss', tossSecretKey: 'test_sk_abc', fetch: async () => {}, lookupWebhookSecret: () => null });
+  assert.equal(toss.name, 'toss');
+  assert.throws(() => createPaymentProvider({ provider: 'toss', lookupWebhookSecret: () => null }), /TOSS_SECRET_KEY/);
+  assert.throws(() => createPaymentProvider({ provider: 'paypal' }), /PAYMENT_PROVIDER/);
+});

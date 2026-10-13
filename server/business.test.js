@@ -62,6 +62,13 @@ test('checkStartupConfig: 운영 모드에서 형식이 틀린 등록번호·이
   assert.ok(B.checkStartupConfig({ ...prod, DEV_DEPOSIT: '1' }).some((e) => e.includes('DEV_DEPOSIT')));
 });
 
+test('checkStartupConfig: 운영 모드에서 PAYMENT_PROVIDER=toss 인데 TOSS_SECRET_KEY 가 없으면 거부', () => {
+  const prod = { ...FULL_ENV, NODE_ENV: 'production' };
+  assert.ok(B.checkStartupConfig({ ...prod, PAYMENT_PROVIDER: 'toss' }).some((e) => e.includes('TOSS_SECRET_KEY')));
+  assert.ok(B.checkStartupConfig({ ...prod, PAYMENT_PROVIDER: 'nope' }).some((e) => e.includes('PAYMENT_PROVIDER')));
+  assert.deepEqual(B.checkStartupConfig({ ...prod, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'live_sk_fake' }), []);
+});
+
 test('publicBusinessInfo: 필수 값이 다 있어야 ready, 비면 ready=false', () => {
   assert.equal(B.publicBusinessInfo(B.readBusinessInfo(FULL_ENV)).ready, true);
   assert.equal(B.publicBusinessInfo(B.readBusinessInfo({ ...FULL_ENV, BIZ_MAIL_ORDER_NO: '' })).ready, true);
@@ -109,7 +116,7 @@ const START_TIMEOUT_MS = 15000; // 전체 테스트가 병렬로 돌 때 느린 
 /** 진입점을 띄워 { started, code, output } — "[server]" 로그가 나오면 시작된 것으로 보고 끈다 */
 function runEntry(env) {
   const childEnv = { ...process.env, ...BASE_ENV, DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'ad-dodge-entry-')), ...env };
-  for (const k of ['NODE_ENV', 'FREE_MODE', 'DEV_DEPOSIT', ...Object.keys(FULL_ENV)]) if (!(k in env)) delete childEnv[k];
+  for (const k of ['NODE_ENV', 'FREE_MODE', 'DEV_DEPOSIT', 'PAYMENT_PROVIDER', 'TOSS_SECRET_KEY', 'TOSS_VA_BANK', ...Object.keys(FULL_ENV)]) if (!(k in env)) delete childEnv[k];
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [ENTRY], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
@@ -146,4 +153,17 @@ test('[진입점] 운영 모드에서 사업자 정보가 다 있으면 시작�
 test('[진입점] 로컬 테스트 모드(start-test.cmd 와 같은 FREE_MODE=1)는 사업자 정보 없이도 시작된다', async () => {
   const r = await runEntry({ FREE_MODE: '1', MODERATION_MODE: 'auto-approve' });
   assert.equal(r.started, true, r.output);
+});
+
+test('[진입점] 운영 모드에서 PAYMENT_PROVIDER=toss 인데 TOSS_SECRET_KEY 가 없으면 시작을 거부한다', async () => {
+  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, PAYMENT_PROVIDER: 'toss' });
+  assert.equal(r.started, false, r.output);
+  assert.notEqual(r.code, 0);
+  assert.match(r.output, /TOSS_SECRET_KEY/);
+});
+
+test('[진입점] 운영 모드 + 토스 키가 있으면 시작된다(시작 시 PG 호출 없음, WEBHOOK_SECRET 불필요)', async () => {
+  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'test_sk_fakeKeyForEntryTest0000', WEBHOOK_SECRET: '' });
+  assert.equal(r.started, true, r.output);
+  assert.match(r.output, /결제=toss/);
 });

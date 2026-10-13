@@ -8,14 +8,15 @@
 //   GET  /api/events                 SSE: purchase / takedown / review / ledger(관리자 수정)
 //   POST /api/orders                 주문 생성 → 가상계좌
 //   GET  /api/orders/:orderId        주문 상태(orderId = 비밀 토큰)
-//   POST /api/payments/webhook       PG 웹훅(서명 검증)
+//   POST /api/payments/webhook       PG 웹훅(모의: HMAC 서명 / 토스: secret 비교 + 결제 조회 재확인). PG 장애 시 503(재전송 유도)
 //   POST /api/kills  | GET /api/kills/today
 //   POST /api/reports
 //   POST /api/runs                   판 기록 → 오늘 백분위(+킬·등장·사이트 이동 집계)
 //   POST /api/challenges | GET /api/challenges/:id   도전장
 //   POST /api/orders/:orderId/topup  붙어 있는 내 광고에 칸 추가(orderId = 소유 증명)
 // 테스트 모드(freeMode): 주문하면 결제 없이 바로 출연
-// 개발 전용(devMode): POST /api/dev/deposit/:orderId — 은행 입금 흉내(서명된 웹훅을 내부에서 발생)
+// 개발 전용(devMode + 모의 PG일 때만): POST /api/dev/deposit/:orderId — 은행 입금 흉내(서명된 웹훅을 내부에서 발생)
+// 결제 제공자: payment = { provider: 'mock' | 'toss', tossSecretKey, tossBank } (server/payments.js) — fetch 는 테스트에서 주입
 // 관리자(Bearer ADMIN_TOKEN): GET /api/admin/advertisers?status= · POST /api/admin/advertisers/:id/:action
 //   · POST /api/admin/advertisers/:id/edit { name?, landingUrl?, image? } — 이름·이동 주소·로고 수정
 
@@ -25,7 +26,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const { createStore } = require('./store.js');
-const { createMockProvider } = require('./payments.js');
+const { createPaymentProvider } = require('./payments.js');
 const { createOrderService } = require('./orders.js');
 const { createEventHub, createRateLimiter } = require('./realtime.js');
 const { HttpError, readBody, parseJson, sendJson, serveStatic } = require('./http-util.js');
@@ -60,12 +61,15 @@ function createImageSaver(dataDir) {
   };
 }
 
-function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, business, now = Date.now }) {
+function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequested = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, business, payment = { provider: 'mock' }, fetch, now = Date.now }) {
   const businessInfo = publicBusinessInfo(business);
   const hub = createEventHub();
-  const provider = createMockProvider({ secret: webhookSecret, now });
+  let service = null; // provider 가 웹훅 검증 때 주문에 저장된 secret 을 찾는다(서비스는 아래에서 만든다)
+  const provider = createPaymentProvider({ ...payment, webhookSecret, fetch, now, lookupWebhookSecret: (orderId) => service.getWebhookSecret(orderId) });
+  // 모의 입금은 모의 PG에서만 — 실제 PG에서 켜 두면 서명 없이 입금 처리되는 길이 생긴다
+  const devMode = devModeRequested && provider.name === 'mock';
   const store = createStore({ file: path.join(dataDir, 'db.json') });
-  const service = createOrderService({
+  service = createOrderService({
     store,
     provider,
     classifier,
@@ -115,9 +119,13 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMo
     const raw = await readBody(req);
     let payload;
     try {
-      payload = provider.verifyWebhook(req.headers, raw);
+      payload = await provider.verifyWebhook(req.headers, raw);
     } catch (err) {
-      console.warn('[webhook] 서명 검증 실패', err.message);
+      if (err.code === 'PG_UNAVAILABLE') {
+        console.error('[webhook] 결제 조회 실패 — PG 재전송을 기다립니다', err.message);
+        throw new HttpError(503, '잠시 후 다시 보내 주세요');
+      }
+      console.warn('[webhook] 검증 실패', err.message);
       throw new HttpError(401, '서명이 올바르지 않아요');
     }
     sendJson(res, 200, asUserError(() => service.confirmDeposit(payload)));
@@ -127,7 +135,8 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMo
     const order = service.getOrder(orderId);
     if (!order) throw new HttpError(404, '주문을 찾을 수 없어요');
     const raw = JSON.stringify({ orderId, status: 'DONE', amount: order.amount });
-    sendJson(res, 200, asUserError(() => service.confirmDeposit(provider.verifyWebhook({ 'x-mock-signature': provider.sign(raw) }, raw))));
+    const payload = await provider.verifyWebhook({ 'x-mock-signature': provider.sign(raw) }, raw);
+    sendJson(res, 200, asUserError(() => service.confirmDeposit(payload)));
   }
 
   async function handleAdmin(req, res, url, parts) {
@@ -175,7 +184,10 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMo
         limit(req, 'orders');
         if (parts[2] === 'topup') {
           const body = parseJson(await readBody(req));
-          return sendJson(res, 201, asUserError(() => service.createTopup(String(parts[1]), body)));
+          const topup = await service.createTopup(String(parts[1]), body).catch((err) => {
+            throw new HttpError(400, err.message);
+          });
+          return sendJson(res, 201, topup);
         }
         const body = parseJson(await readBody(req));
         const order = await service.createOrder(body).catch((err) => {

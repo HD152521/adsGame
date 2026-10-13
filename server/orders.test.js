@@ -289,7 +289,7 @@ test('[칸 추가] 붙어 있는 내 광고에 칸을 더하면 같은 광고의
   const { service } = setup();
   const order = await paidSnipe(service, '민수', 2);
   await paidSnipe(service, '영희', 2);
-  const topup = service.createTopup(order.orderId, { slots: 6, consents: CONSENTS });
+  const topup = await service.createTopup(order.orderId, { slots: 6, consents: CONSENTS });
   assert.equal(topup.amount, 6000);
   assert.equal(topup.advertiserId, order.advertiserId);
   assert.equal(topup.review, false, '이미 검수된 광고라 다시 검수하지 않음');
@@ -302,14 +302,14 @@ test('[칸 추가] 붙어 있는 내 광고에 칸을 더하면 같은 광고의
 test('[칸 추가] 붙어 있지 않은(검수 대기·가려짐) 광고나 없는 주문엔 못 더한다', async () => {
   const { service } = setup();
   const pending = await service.createOrder({ kind: 'logo', name: '치킨', slots: 1, image: PNG_1PX, consents: CONSENTS });
-  assert.throws(() => service.createTopup(pending.orderId, { slots: 1, consents: CONSENTS }), /붙어 있는/);
-  assert.throws(() => service.createTopup('nope', { slots: 1, consents: CONSENTS }), /주문/);
+  await assert.rejects(service.createTopup(pending.orderId, { slots: 1, consents: CONSENTS }), /붙어 있는/);
+  await assert.rejects(service.createTopup('nope', { slots: 1, consents: CONSENTS }), /주문/);
 });
 
 test('[칸 추가] 신고로 가리면 원래 칸과 추가 칸이 함께 가려지고, 복구도 함께', async () => {
   const { service } = setup();
   const order = await paidSnipe(service, '민수', 2);
-  const topup = service.createTopup(order.orderId, { slots: 3, consents: CONSENTS });
+  const topup = await service.createTopup(order.orderId, { slots: 3, consents: CONSENTS });
   service.confirmDeposit({ orderId: topup.orderId, status: 'DONE', amount: 3000 });
   service.report({ advId: order.advertiserId, reason: 'rights', reporter: 'x' });
   assert.equal(service.getLedger().soldSlots, 0);
@@ -320,7 +320,7 @@ test('[칸 추가] 신고로 가리면 원래 칸과 추가 칸이 함께 가려
 test('[칸 추가] 관리자가 광고를 거절하면 이미 결제한 추가 칸까지 전부 환불 대상', async () => {
   const { service } = setup();
   const order = await paidSnipe(service, '민수', 2);
-  const topup = service.createTopup(order.orderId, { slots: 3, consents: CONSENTS });
+  const topup = await service.createTopup(order.orderId, { slots: 3, consents: CONSENTS });
   service.confirmDeposit({ orderId: topup.orderId, status: 'DONE', amount: 3000 });
   service.adminAction(order.advertiserId, 'reject');
   assert.equal(service.getOrder(order.orderId).status, ORDER_STATUS.REFUND_REQUIRED);
@@ -340,7 +340,7 @@ test('[도전장] 상한을 넘으면 가장 오래된 것부터 지운다', () 
 test('[관리자 수정] 이름·이동 주소를 바꾸면 그 광고의 주문 전체(추가 칸 포함)에 적용 + ledger 이벤트', async () => {
   const { service, events } = setup();
   const order = await paidSnipe(service, '민수', 2);
-  const topup = service.createTopup(order.orderId, { slots: 1, consents: CONSENTS });
+  const topup = await service.createTopup(order.orderId, { slots: 1, consents: CONSENTS });
   service.confirmDeposit({ orderId: topup.orderId, status: 'DONE', amount: 1000 });
   service.editAdvertiser(order.advertiserId, { name: '민수네', landingUrl: 'minsu.example' });
   const ad = service.getLedger().advertisers.find((a) => a.id === order.advertiserId);
