@@ -38,6 +38,11 @@
     </div>
     <p id="admin-status" class="status" role="status" aria-live="polite"></p>
     <ul id="admin-list" class="admin__list"></ul>
+    <details id="admin-audit" class="admin__errors admin__audit" hidden>
+      <summary>관리 기록 <small id="admin-audit-count"></small></summary>
+      <p class="admin__errors-note">승인·거절·떼기·다시 붙이기·고치기·환불 완료·CSV 내려받기 최근 100건. 누가 = 토큰 지문·가린 IP, 무엇 = 주문번호 앞 8자리·바뀐 항목 이름(값은 남기지 않음).</p>
+      <ul id="admin-audit-list" class="admin__errors-list"></ul>
+    </details>
   </main>
   <script src="admin.js"></script>
 </body>

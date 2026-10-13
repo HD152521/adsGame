@@ -76,8 +76,20 @@ function assertSlots(slots) {
 }
 
 // instantActivate: 테스트 모드(FREE_MODE) — 결제 단계 없이 주문 즉시 입금 확정 처리. 검수 규칙은 그대로 적용된다.
+// 관리자 상태 바꾸기 작업 — 이름을 늘리면 server/audit-log.js 의 AUDIT_ACTIONS 에도 넣어야 한다
+//   (app.js 가 시작할 때 둘을 맞춰 보고, 어긋나면 서버를 띄우지 않는다)
+const ADMIN_TRANSITIONS = Object.freeze({
+  approve: { from: [ORDER_STATUS.PENDING_REVIEW], to: ORDER_STATUS.ACTIVE },
+  reject: { from: [ORDER_STATUS.PENDING_REVIEW, ORDER_STATUS.ACTIVE, ORDER_STATUS.HIDDEN], to: ORDER_STATUS.REFUND_REQUIRED },
+  hide: { from: [ORDER_STATUS.ACTIVE], to: ORDER_STATUS.HIDDEN },
+  restore: { from: [ORDER_STATUS.HIDDEN], to: ORDER_STATUS.ACTIVE },
+});
+const ADMIN_ACTIONS = Object.freeze(Object.keys(ADMIN_TRANSITIONS));
+
 function createOrderService({ store, provider, classifier, saveImage, broadcast, now, seedLedger, instantActivate = false }) {
   const orders = () => store.read().orders;
+  // 주소에서 온 orderId(__proto__·constructor 등)로 프로토타입 속성을 주문으로 착각하지 않게 — 자기 키만 본다
+  const ownOrder = (orderId) => (Object.prototype.hasOwnProperty.call(orders(), String(orderId)) ? orders()[orderId] : null);
   // 칸 추가 구매로 한 광고(advertiserId)가 주문 여러 건으로 나뉠 수 있다 — 가림·복구는 언제나 함께
   const ordersOf = (advId) => Object.values(orders()).filter((o) => o.advertiserId === advId);
   const findByAdvertiser = (advId) => ordersOf(advId).sort((a, b) => a.createdAt - b.createdAt)[0] || null;
@@ -178,7 +190,7 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
 
   /** 칸 추가: 붙어 있는 내 광고(orderId = 소유 증명)에 칸만 더한다. 이미 검수된 내용이라 다시 검수하지 않는다 */
   async function createTopup(parentOrderId, { slots, consents }) {
-    const parent = orders()[parentOrderId];
+    const parent = ownOrder(parentOrderId);
     if (!parent) throw new Error('주문을 찾을 수 없습니다');
     if (parent.status !== ORDER_STATUS.ACTIVE) throw new Error('붙어 있는 광고에만 칸을 더할 수 있어요');
     assertConsents(consents);
@@ -206,7 +218,7 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
   }
 
   function confirmDeposit({ orderId, status, amount }) {
-    const order = orders()[orderId];
+    const order = ownOrder(orderId);
     if (!order) throw new Error('주문을 찾을 수 없습니다');
     if (status !== 'DONE' || order.status !== ORDER_STATUS.AWAITING_DEPOSIT) return publicView(order); // 멱등
     if (amount !== order.amount) throw new Error(`입금 금액이 주문과 다릅니다 (주문 ${order.amount}, 입금 ${amount})`);
@@ -226,13 +238,6 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     if (next === ORDER_STATUS.PENDING_REVIEW) broadcast('review', { count: listAdvertisers(ORDER_STATUS.PENDING_REVIEW).length });
     return publicView(updated);
   }
-
-  const ADMIN_TRANSITIONS = {
-    approve: { from: [ORDER_STATUS.PENDING_REVIEW], to: ORDER_STATUS.ACTIVE },
-    reject: { from: [ORDER_STATUS.PENDING_REVIEW, ORDER_STATUS.ACTIVE, ORDER_STATUS.HIDDEN], to: ORDER_STATUS.REFUND_REQUIRED },
-    hide: { from: [ORDER_STATUS.ACTIVE], to: ORDER_STATUS.HIDDEN },
-    restore: { from: [ORDER_STATUS.HIDDEN], to: ORDER_STATUS.ACTIVE },
-  };
 
   /**
    * 관리자 수정: 이름·이동 주소·로고만(칸 수·금액은 돈이라 거절·환불 흐름으로). 보낸 항목만 바꾸고,
@@ -275,7 +280,7 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
   }
 
   function adminAction(advId, action) {
-    const rule = ADMIN_TRANSITIONS[action];
+    const rule = Object.prototype.hasOwnProperty.call(ADMIN_TRANSITIONS, action) ? ADMIN_TRANSITIONS[action] : null;
     if (!rule) throw new Error(`알 수 없는 작업: ${action}`);
     const order = findByAdvertiser(advId);
     if (!order) throw new Error('광고를 찾을 수 없습니다');
@@ -287,7 +292,7 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
 
   /** 관리자 "환불 완료" 기록 — 주문 하나 단위(칸 추가 주문은 따로 돈을 냈으니 따로 돌려준다) */
   function markRefunded(orderId, { refundedAt, memo } = {}) {
-    const order = Object.prototype.hasOwnProperty.call(orders(), orderId) ? orders()[orderId] : null;
+    const order = ownOrder(orderId);
     if (!order) throw new Error('주문을 찾을 수 없습니다');
     if (order.status === ORDER_STATUS.REFUNDED) throw new Error('이미 환불 완료된 주문입니다');
     if (order.status !== ORDER_STATUS.REFUND_REQUIRED) throw new Error(`${order.status} 상태에서는 환불 완료 처리할 수 없습니다(환불 필요 주문만)`);
@@ -351,10 +356,10 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
     createOrder,
     createTopup,
     confirmDeposit,
-    getOrder: (orderId) => publicView(orders()[orderId]),
+    getOrder: (orderId) => publicView(ownOrder(orderId)),
     /** PG 웹훅 검증용 — 발급 때 저장한 secret(없으면 null). 공개 API로 내보내지 않는다 */
     getWebhookSecret: (orderId) => {
-      const o = Object.prototype.hasOwnProperty.call(orders(), orderId) ? orders()[orderId] : null;
+      const o = ownOrder(orderId);
       return (o && o.payment && o.payment.webhookSecret) || null;
     },
     getLedger,
@@ -372,4 +377,4 @@ function createOrderService({ store, provider, classifier, saveImage, broadcast,
   };
 }
 
-module.exports = { createOrderService, ORDER_STATUS, REPORT_HIDE_THRESHOLD, MAX_SLOTS_PER_ORDER, REFUND_MEMO_MAX };
+module.exports = { createOrderService, ORDER_STATUS, ADMIN_ACTIONS, REPORT_HIDE_THRESHOLD, MAX_SLOTS_PER_ORDER, REFUND_MEMO_MAX };

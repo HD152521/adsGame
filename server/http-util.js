@@ -54,13 +54,18 @@ function readBody(req, limit = MAX_BODY_BYTES) {
   });
 }
 
+/** 요청 본문 → JSON 객체. 빈 본문은 {}. null·배열·숫자·문자열은 400 —
+ *  구조 분해(const { advId } = …)가 TypeError 로 터지며 내부 문구가 새지 않게(Step 5 리뷰 LOW) */
 function parseJson(raw) {
   if (raw.length === 0) return {};
+  let value;
   try {
-    return JSON.parse(raw);
+    value = JSON.parse(raw);
   } catch {
     throw new HttpError(400, '요청 형식이 올바르지 않아요');
   }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, '요청 형식이 올바르지 않아요');
+  return value;
 }
 
 function send(res, status, body, headers = {}) {

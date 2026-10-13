@@ -4,7 +4,7 @@
 //   PORT              기본 5173
 //   HOST              기본 0.0.0.0 (FREE_MODE·DEV_DEPOSIT 이면 늘 127.0.0.1)
 //   DATA_DIR          기본 ./data (db.json + uploads/) — git에 올리지 않는다
-//   ADMIN_TOKEN       관리자 페이지 토큰(필수, 16자 이상 — 운영 모드는 32자 이상)
+//   ADMIN_TOKEN       관리자 페이지 토큰(필수, 16자 이상 — 운영 모드는 32자 이상 + 문자 10종 이상·로컬 기본값 금지)
 //   PAYMENT_PROVIDER  mock(기본) | toss — 결제 제공자(server/payments.js)
 //   WEBHOOK_SECRET    모의 PG 웹훅 서명 비밀값(PAYMENT_PROVIDER=mock 일 때 필수)
 //   TOSS_SECRET_KEY   토스페이먼츠 시크릿 키 test_sk_… / live_sk_… (PAYMENT_PROVIDER=toss 일 때 필수)
@@ -15,7 +15,7 @@
 //   GOOGLE_VISION_API_KEY  Google Cloud Vision API 키(MODERATION_MODE=vision 일 때 필수, 로그에 찍지 않는다)
 //   TRUST_PROXY=1     리버스 프록시(fly 등) 한 단 뒤에서 X-Forwarded-For 마지막 값으로 IP 판별(fly.toml 기본 1)
 //   NODE_ENV=production  운영 모드 — 사업자 정보(BIZ_*·HOSTING_PROVIDER) 필수, FREE_MODE·DEV_DEPOSIT 금지,
-//                     ADMIN_TOKEN 32자 이상, 모의 결제(mock) 금지(server/business.js)
+//                     ADMIN_TOKEN 32자 이상·단조롭지 않게, 모의 결제(mock) 금지(server/business.js)
 //   종료: SIGTERM·SIGINT 를 받으면 밀린 lazy 쓰기를 디스크에 쓰고 끝낸다(server/shutdown.js)
 //   컨테이너에서는 server/container-entry.js 가 권한을 내려놓은 뒤 이 파일을 부른다(Dockerfile)
 //   BIZ_NAME · BIZ_OWNER · BIZ_REG_NO · BIZ_ADDRESS · BIZ_PHONE · BIZ_EMAIL · BIZ_MAIL_ORDER_NO · HOSTING_PROVIDER

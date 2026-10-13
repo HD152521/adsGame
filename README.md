@@ -52,7 +52,7 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 
 | 환경변수 | 설명 |
 |---|---|
-| `ADMIN_TOKEN` | 관리자 토큰 (필수, 16자+ · **운영 모드는 32자+**, 무작위 값: `openssl rand -hex 32`) |
+| `ADMIN_TOKEN` | 관리자 토큰 (필수, 16자+ · **운영 모드는 32자+ · 서로 다른 문자 10종+ · 로컬 기본값·자리표시 낱말 금지**, 무작위 값: `openssl rand -hex 32`). 관리자 경로는 IP별 분당 120회, 토큰 실패 5분 10회 초과 시 15분 429. 관리 작업은 관리 기록(감사 로그)에 남는다 |
 | `PAYMENT_PROVIDER` | `mock`(기본, 모의 PG) / `toss`(토스페이먼츠 가상계좌). 다른 값이면 시작 거부. **운영 모드에서 `mock`(또는 비움)이면 시작 거부** |
 | `WEBHOOK_SECRET` | 모의 PG 웹훅 서명 비밀값 (`PAYMENT_PROVIDER=mock`일 때 필수, 16자+) |
 | `TOSS_SECRET_KEY` | 토스페이먼츠 **시크릿 키**(`test_sk_…`/`live_sk_…`). `PAYMENT_PROVIDER=toss`일 때 필수 — 없거나 형식이 틀리면 시작 거부. 호스팅 비밀값으로만 넣는다 |
@@ -64,7 +64,7 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 | `HOST` | 기본 `0.0.0.0`. `FREE_MODE`·`DEV_DEPOSIT`이면 늘 `127.0.0.1` |
 | `DATA_DIR` | 기본 `./data` (db.json + uploads/, git 제외) |
 | `TRUST_PROXY=1` | 리버스 프록시 **한 단** 뒤에서 X-Forwarded-For **마지막 값**으로 접속 IP 판별(레이트 리밋·신고자 구분). Fly.io는 프록시 한 단이라 `fly.toml`에 `1`로 들어 있다. 프록시 없이 직접 받을 때는 켜지 말 것(클라이언트가 IP를 위조할 수 있다) |
-| `NODE_ENV=production` | **운영 모드**(컨테이너 이미지 기본값). 아래 사업자 정보 필수 값이 비거나 형식이 틀리면, `FREE_MODE`·`DEV_DEPOSIT`이 켜져 있으면, `ADMIN_TOKEN`이 32자 미만이면, 모의 결제(`mock`)면 서버가 시작을 거부한다 |
+| `NODE_ENV=production` | **운영 모드**(컨테이너 이미지 기본값). 아래 사업자 정보 필수 값이 비거나 형식이 틀리면, `FREE_MODE`·`DEV_DEPOSIT`이 켜져 있으면, `ADMIN_TOKEN`이 32자 미만이거나 단조로우면, 모의 결제(`mock`)면 서버가 시작을 거부한다 |
 | `PORT` | 기본 `5173` (컨테이너는 `8080`) |
 | `BIZ_NAME` · `BIZ_OWNER` · `BIZ_REG_NO` · `BIZ_ADDRESS` · `BIZ_PHONE` · `BIZ_EMAIL` · `HOSTING_PROVIDER` | 사업자 정보(법정 표시) — 운영 모드 필수. `BIZ_REG_NO`는 000-00-00000, `BIZ_EMAIL`은 메일 형식 |
 | `BACKUP_S3_ENDPOINT` · `BACKUP_S3_BUCKET` · `BACKUP_S3_ACCESS_KEY` · `BACKUP_S3_SECRET_KEY` · `BACKUP_S3_REGION` | **외부 백업(선택)** — 다섯 값이 **모두** 있을 때만 매시간 백업 파일을 `{ENDPOINT}/{BUCKET}/ad-dodge/db-….json`에 PUT(SigV4 서명). 일부만 있으면 경고 후 꺼짐, ENDPOINT 는 `https://`만. 버킷은 **비공개**로(백업에 결제 검증값이 들어 있다), 키는 그 버킷 쓰기 전용 권장. 업로드 실패는 서버를 멈추지 않고 "최근 문제"에 남는다 |

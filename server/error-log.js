@@ -1,4 +1,4 @@
-// 최근 문제(오류 알림) 링버퍼 — 500 오류·웹훅 검증 실패·PG 장애·백업 실패를 메모리에 최근 50건만 모은다.
+// 최근 문제(오류 알림) 링버퍼 — 500 오류·웹훅 검증 실패·PG 장애·백업 실패·관리자 무차별 대입 차단·감사 기록 실패를 메모리에 최근 50건만 모은다.
 //   관리자 GET /api/admin/errors 와 관리자 화면 상단 "최근 문제" 칸에 보인다. 재시작하면 비워진다(로그는 fly logs 에).
 //   남기는 것: 시각·종류·짧은 설명뿐. 요청 본문·쿼리는 애초에 받지 않고, 설명 안의 비밀값은 가린다:
 //     · 설정된 비밀값(관리자 토큰·웹훅 비밀값·토스 키·S3 키) → [비밀값]
@@ -9,7 +9,7 @@
 const ERROR_LOG_MAX = 50;
 const MESSAGE_MAX = 300;
 const MIN_SECRET_LENGTH = 8; // 너무 짧은 값까지 가리면 일반 낱말이 지워진다(실제 비밀값은 16자 이상)
-const ERROR_KINDS = new Set(['server', 'webhook', 'pg', 'backup']);
+const ERROR_KINDS = new Set(['server', 'webhook', 'pg', 'backup', 'admin', 'audit']); // admin = 관리자 토큰 실패 반복 차단(server/admin-guard.js), audit = 감사 기록 실패
 const REDACTED = '[비밀값]';
 const LONG_HEX = /[a-f0-9]{16,}/gi;
 const KEY_PATTERNS = [/\b(?:test|live)_(?:sk|gsk|ck)_[A-Za-z0-9_-]+/g, /Bearer\s+\S+/gi];
@@ -33,7 +33,7 @@ function createErrorLog({ max = ERROR_LOG_MAX, now = Date.now, secrets = [] } = 
   };
 
   return {
-    /** kind: server | webhook | pg | backup (그 밖은 other) */
+    /** kind: server | webhook | pg | backup | admin | audit (그 밖은 other) */
     record(kind, message) {
       const entry = Object.freeze({ at: now(), kind: ERROR_KINDS.has(kind) ? kind : 'other', message: clean(message) });
       entries = [entry, ...entries].slice(0, max);

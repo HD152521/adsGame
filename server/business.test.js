@@ -26,7 +26,7 @@ const FULL_ENV = {
 };
 
 // 운영 모드로 뜰 수 있는 최소 설정 — 사업자 정보 + 32자 이상 관리자 토큰 + 실제 PG(토스). 모의 결제는 운영 금지
-const PROD_ADMIN_TOKEN = 'prod-admin-token-0123456789abcdef'; // 33자
+const PROD_ADMIN_TOKEN = '9f3c1a7e5b2d8046c4e1f0a93b7d6e2c'; // 32자 무작위(openssl rand -hex 16 모양)
 const PROD_READY = { ...FULL_ENV, NODE_ENV: 'production', ADMIN_TOKEN: PROD_ADMIN_TOKEN, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'live_sk_fakeKeyForStartupTest00' };
 
 test('readBusinessInfo: 환경변수 8개를 앞뒤 공백 없이 읽는다(없으면 빈 문자열)', () => {
@@ -214,7 +214,7 @@ test('checkStartupConfig: 운영 모드에서 ADMIN_TOKEN 이 32자 미만이면
   assert.ok(errors.some((e) => e.includes('ADMIN_TOKEN') && e.includes('32')), errors.join(' / '));
   assert.ok(errors.every((e) => !e.includes(short)));
   assert.ok(B.checkStartupConfig({ ...PROD_READY, ADMIN_TOKEN: '' }).some((e) => e.includes('ADMIN_TOKEN')));
-  assert.deepEqual(B.checkStartupConfig({ ...PROD_READY, ADMIN_TOKEN: 'x'.repeat(32) }), []);
+  assert.deepEqual(B.checkStartupConfig({ ...PROD_READY, ADMIN_TOKEN: PROD_ADMIN_TOKEN }), []);
 });
 
 test('checkStartupConfig: 로컬은 ADMIN_TOKEN 32자 규칙을 적용하지 않는다(16자 규칙은 진입점에서)', () => {
@@ -256,4 +256,34 @@ test('[진입점] 운영 모드에서 ADMIN_TOKEN 이 32자 미만이면 시작�
   assert.notEqual(r.code, 0);
   assert.match(r.output, /ADMIN_TOKEN/);
   assert.ok(!r.output.includes(short));
+});
+
+// ── Step 6: 관리자 토큰 강도 ─────────────────────────────────────────────────
+test('adminTokenWeakness: 32자 이상이어도 같은 문자 반복·문자 종류가 적거나 로컬 기본값이면 약하다', () => {
+  assert.match(B.adminTokenWeakness('x'.repeat(40)), /단조/);
+  assert.match(B.adminTokenWeakness('abab'.repeat(10)), /단조/);
+  assert.match(B.adminTokenWeakness('0123012301230123012301230123012301'), /단조/);
+  assert.match(B.adminTokenWeakness('local-admin-token-1234-local-admin-token'), /기본값/);
+  assert.match(B.adminTokenWeakness('CHANGEME-please-9f3c1a7e5b2d8046c4e1'), /기본값/);
+  assert.match(B.adminTokenWeakness('short'), /32/);
+  assert.equal(B.adminTokenWeakness(PROD_ADMIN_TOKEN), null);
+  assert.equal(B.adminTokenWeakness('b5d0Qz-7Lw_Kp3Rx9Vt2Yh8Nc4Mj6Fg1'), null);
+});
+
+test('checkStartupConfig: 운영 모드에서 약한 ADMIN_TOKEN(반복·로컬 기본값)은 거부, 메시지에 값은 없음', () => {
+  for (const weak of ['x'.repeat(32), 'local-admin-token-1234-local-admin-token']) {
+    const errors = B.checkStartupConfig({ ...PROD_READY, ADMIN_TOKEN: weak });
+    assert.ok(errors.some((e) => e.includes('ADMIN_TOKEN')), weak);
+    assert.ok(errors.every((e) => !e.includes(weak)));
+  }
+  assert.deepEqual(B.checkStartupConfig({ ADMIN_TOKEN: 'x'.repeat(32), FREE_MODE: '1' }), [], '로컬은 강도 규칙 없음');
+});
+
+test('[진입점] 운영 모드에서 ADMIN_TOKEN 이 같은 문자 반복이면 시작을 거부한다(로그에 값 없음)', async () => {
+  const weak = 'a'.repeat(48);
+  const r = await runEntry({ ...PROD_READY, ADMIN_TOKEN: weak });
+  assert.equal(r.started, false, r.output);
+  assert.notEqual(r.code, 0);
+  assert.match(r.output, /ADMIN_TOKEN/);
+  assert.ok(!r.output.includes(weak));
 });

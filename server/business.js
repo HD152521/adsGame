@@ -11,6 +11,8 @@
 //   auto-approve(전부 승인)는 운영 모드에서 띄우지 않는다(server/moderation.js checkModerationConfig).
 //   운영 비밀값·결제(계획서 Step 4): 운영 모드에서는
 //     · ADMIN_TOKEN 이 32자 미만이면 띄우지 않는다(로컬은 진입점에서 16자 규칙만)
+//     · ADMIN_TOKEN 이 32자 이상이어도 문자 종류가 단조롭거나(같은 문자 반복 등, 서로 다른 문자 10종 미만)
+//       로컬 기본값·자리표시 낱말(local-admin-token·changeme 등)이 들어 있으면 띄우지 않는다(계획서 Step 6)
 //     · 모의 결제(PAYMENT_PROVIDER 없음·mock)면 띄우지 않는다 — 모의 PG는 실제 입금을 받지 못하고 웹훅 비밀값 하나로 입금이 확정된다
 //   오류 문구에 비밀값 자체는 절대 넣지 않는다(로그로 새지 않게).
 
@@ -32,6 +34,9 @@ const FIELD_MAX_LENGTH = 200;
 const REG_NO_DIGITS = 10; // 사업자등록번호 000-00-00000
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRODUCTION_ADMIN_TOKEN_MIN = 32;
+const ADMIN_TOKEN_MIN_DISTINCT = 10; // openssl rand -hex 32 는 16종을 거의 다 쓴다 — 10종 미만이면 사람이 지은 값
+// 로컬 기본값(start-test.cmd)·흔한 자리표시 낱말 — 대소문자 무시
+const WEAK_TOKEN_WORDS = ['local-admin-token', 'admin-token', 'changeme', 'change-me', 'password', 'example', 'placeholder'];
 
 function isProductionMode(env) {
   return env.NODE_ENV === 'production';
@@ -53,10 +58,21 @@ function formatErrors(env, info) {
   return errors;
 }
 
-/** 운영 모드 전용 — 관리자 토큰 길이·모의 결제 금지 */
+/** 관리자 토큰 강도 → 약한 이유(문구, 값 자체는 넣지 않음) | null(통과) */
+function adminTokenWeakness(token) {
+  const value = String(token || '');
+  if (value.length < PRODUCTION_ADMIN_TOKEN_MIN) return `${PRODUCTION_ADMIN_TOKEN_MIN}자 이상이어야 합니다`;
+  const lower = value.toLowerCase();
+  if (WEAK_TOKEN_WORDS.some((w) => lower.includes(w))) return '로컬 기본값·자리표시 낱말이 들어 있습니다';
+  if (new Set(value).size < ADMIN_TOKEN_MIN_DISTINCT) return `문자 종류가 단조롭습니다(서로 다른 문자 ${ADMIN_TOKEN_MIN_DISTINCT}종 이상)`;
+  return null;
+}
+
+/** 운영 모드 전용 — 관리자 토큰 강도·모의 결제 금지 */
 function productionSecretErrors(env) {
   const errors = [];
-  if (String(env.ADMIN_TOKEN || '').length < PRODUCTION_ADMIN_TOKEN_MIN) errors.push(`ADMIN_TOKEN 은 운영 모드에서 ${PRODUCTION_ADMIN_TOKEN_MIN}자 이상이어야 합니다(무작위 값 권장: openssl rand -hex 32).`);
+  const weakness = adminTokenWeakness(env.ADMIN_TOKEN);
+  if (weakness) errors.push(`ADMIN_TOKEN 이 약합니다 — 운영 모드에서는 ${weakness}(무작위 값 권장: openssl rand -hex 32).`);
   if (readPaymentConfig(env).provider === 'mock') errors.push('운영 모드에서는 모의 결제(PAYMENT_PROVIDER=mock)를 쓸 수 없습니다 — PAYMENT_PROVIDER=toss 와 TOSS_SECRET_KEY 를 넣으세요.');
   return errors;
 }
@@ -78,4 +94,4 @@ function publicBusinessInfo(info) {
   return { ready, ...Object.fromEntries(BUSINESS_FIELDS.map((f) => [f.key, safe[f.key] || ''])) };
 }
 
-module.exports = { BUSINESS_FIELDS, PRODUCTION_ADMIN_TOKEN_MIN, isProductionMode, readBusinessInfo, checkStartupConfig, publicBusinessInfo };
+module.exports = { BUSINESS_FIELDS, PRODUCTION_ADMIN_TOKEN_MIN, adminTokenWeakness, isProductionMode, readBusinessInfo, checkStartupConfig, publicBusinessInfo };

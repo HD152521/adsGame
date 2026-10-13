@@ -1,5 +1,5 @@
 // 관리자 페이지 — 검수 대기열 승인/거절, 신고로 가려진 광고 복구, 환불 대상 확인·환불 완료 기록,
-//   주문 CSV 내려받기, 최근 문제(서버 오류·웹훅·PG·백업 실패) 확인.
+//   주문 CSV 내려받기, 최근 문제(서버 오류·웹훅·PG·백업 실패·관리자 차단·감사 기록 실패) 확인, 관리 기록(감사 로그) 확인.
 //   환불 완료는 "기록"만 한다 — 실제 돈은 운영자가 직접 이체한 뒤 처리 일시·메모를 남긴다(되돌리기 없음).
 //   토큰은 sessionStorage에만(탭을 닫으면 사라짐). 광고 이름은 전부 textContent로만 넣는다.
 
@@ -15,7 +15,9 @@ const ADMIN_ACTIONS = {
   awaiting_deposit: [],
 };
 const ADMIN_REFUND_MEMO_MAX = 200;
-const ADMIN_ERROR_KIND = { server: '서버 오류', webhook: '웹훅 검증 실패', pg: '결제사 장애', backup: '백업 실패', other: '기타' };
+const ADMIN_ERROR_KIND = { server: '서버 오류', webhook: '웹훅 검증 실패', pg: '결제사 장애', backup: '백업 실패', admin: '관리자 차단', audit: '감사 기록 실패', other: '기타' };
+const ADMIN_AUDIT_ACTION = { approve: '붙이기', reject: '거절·환불', hide: '떼어 내기', restore: '다시 붙이기', edit: '고치기', refund: '환불 완료', export: 'CSV 내려받기' };
+const ADMIN_AUDIT_FIELD = { status: '상태', name: '이름', landingUrl: '이동 주소', logo: '로고', refundedAt: '처리 일시', refundMemo: '메모' };
 
 (function bootAdmin() {
   const $ = (id) => document.getElementById(id);
@@ -224,6 +226,28 @@ const ADMIN_ERROR_KIND = { server: '서버 오류', webhook: '웹훅 검증 실�
     }
   };
 
+  /** 관리 기록(감사 로그) — 맨 아래 접힌 칸. 값은 서버가 이미 가려서 준다(textContent로만 넣음) */
+  const loadAudit = async () => {
+    try {
+      const { entries } = await request('/api/admin/audit');
+      const items = entries.map((e) => {
+        const li = document.createElement('li');
+        const when = Object.assign(document.createElement('time'), { textContent: new Date(e.at).toLocaleString('ko-KR') });
+        const what = Object.assign(document.createElement('b'), { textContent: ADMIN_AUDIT_ACTION[e.action] || e.action });
+        const target = e.order ? ` 주문 ${e.order}…` : '';
+        const fields = e.fields && e.fields.length ? ` [${e.fields.map((f) => ADMIN_AUDIT_FIELD[f] || f).join('·')}]` : '';
+        const note = e.note ? ` ${e.note}` : '';
+        li.append(when, ' ', what, `${target}${fields}${note} — 토큰 ${e.actor} · ${e.ip}`);
+        return li;
+      });
+      $('admin-audit-list').replaceChildren(...items);
+      $('admin-audit-count').textContent = entries.length ? `${entries.length}건` : '없음';
+      $('admin-audit').hidden = false;
+    } catch {
+      $('admin-audit').hidden = true;
+    }
+  };
+
   /** CSV 내려받기 — 토큰을 헤더로 보내야 해서 링크 대신 fetch → blob */
   const exportCsv = async () => {
     try {
@@ -239,6 +263,7 @@ const ADMIN_ERROR_KIND = { server: '서버 오류', webhook: '웹훅 검증 실�
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
+      loadAudit(); // 내려받기도 관리 기록에 남는다
     } catch (err) {
       $('admin-status').textContent = err.message;
     }
@@ -247,6 +272,7 @@ const ADMIN_ERROR_KIND = { server: '서버 오류', webhook: '웹훅 검증 실�
   const load = async () => {
     for (const b of document.querySelectorAll('#admin-tabs [data-status]')) b.setAttribute('aria-pressed', String(b.dataset.status === status));
     loadErrors();
+    loadAudit();
     try {
       const list = await request(`/api/admin/advertisers?status=${status}`);
       $('admin-list').replaceChildren(...list.map(renderItem));

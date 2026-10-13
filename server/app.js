@@ -10,6 +10,7 @@
 //   POST /api/orders                 주문 생성 → 가상계좌
 //   GET  /api/orders/:orderId        주문 상태(orderId = 비밀 토큰)
 //   POST /api/payments/webhook       PG 웹훅(모의: HMAC 서명 / 토스: secret 비교 + 결제 조회 재확인). PG 장애 시 503(재전송 유도)
+//                                    검증 실패가 IP별 분당 30회를 넘으면 429(위조 웹훅 폭주로 최근 문제가 덮이지 않게)
 //   POST /api/kills  | GET /api/kills/today
 //   POST /api/reports
 //   POST /api/runs                   판 기록 → 오늘 백분위(+킬·등장·사이트 이동 집계)
@@ -22,7 +23,10 @@
 //   · POST /api/admin/advertisers/:id/edit { name?, landingUrl?, image? } — 이름·이동 주소·로고 수정
 //   · POST /api/admin/orders/:orderId/refund { refundedAt?, memo? } — 환불 필요 → 환불 완료 기록(주문 단위, 되돌리기 없음)
 //   · GET  /api/admin/export.csv?status= — 주문 CSV(UTF-8 BOM·CRLF·CSV 인젝션 방지, 결제 비밀값 없음)
-//   · GET  /api/admin/errors — 최근 문제 50건(500 오류·웹훅 검증 실패·PG 장애·백업 실패, server/error-log.js)
+//   · GET  /api/admin/errors — 최근 문제 50건(500 오류·웹훅 검증 실패·PG 장애·백업 실패·관리자 차단, server/error-log.js)
+//   · GET  /api/admin/audit?limit= — 관리 기록(감사 로그) 최근 순, 최대 2000건(server/audit-log.js)
+//   관리자 경로 전체: 토큰 검사 전에 IP별 버킷(분당 120회), 토큰 실패 5분에 10회 넘으면 그 IP 15분 429(server/admin-guard.js)
+//   성공한 관리자 작업(승인·거절·가림·복구·수정·환불·CSV)은 감사 로그에 즉시 기록 — 토큰 원문·전체 주문번호는 남기지 않는다
 
 const http = require('node:http');
 const fs = require('node:fs');
@@ -31,7 +35,7 @@ const crypto = require('node:crypto');
 
 const { createStore } = require('./store.js');
 const { createPaymentProvider } = require('./payments.js');
-const { createOrderService, ORDER_STATUS } = require('./orders.js');
+const { createOrderService, ORDER_STATUS, ADMIN_ACTIONS } = require('./orders.js');
 const { createEventHub, createRateLimiter } = require('./realtime.js');
 const { HttpError, readBody, parseJson, send, sendJson, serveStatic } = require('./http-util.js');
 const { SEED_LEDGER } = require('../seed-ledger.js');
@@ -39,13 +43,26 @@ const { publicBusinessInfo } = require('./business.js');
 const { checkLedger } = require('./health.js');
 const { ordersToCsv } = require('./export-csv.js');
 const { createErrorLog, maskPath, ERROR_LOG_MAX } = require('./error-log.js');
+const { createAdminGuard } = require('./admin-guard.js');
+const { createAuditLog, maskIp, AUDIT_MAX, AUDIT_ACTIONS } = require('./audit-log.js');
 
 const APP_ROOT = path.join(__dirname, '..');
-const DEFAULT_LIMITS = { orders: 5, kills: 60, reports: 10, challenges: 10, runs: 15, health: 30, windowMs: 60_000 };
+const DEFAULT_LIMITS = { orders: 5, kills: 60, reports: 10, challenges: 10, runs: 15, health: 30, webhookFailures: 30, windowMs: 60_000 };
 const VISIT_DEDUP_MAX = 50_000; // 하루치 (IP·광고) 쌍 기억 상한 — 넘치면 비우고 다시
 const KNOWN_STATUSES = new Set(Object.values(ORDER_STATUS));
 const PG_ERROR_CODES = new Set(['PG_UNAVAILABLE', 'PG_ISSUE_FAILED']);
 const KST_OFFSET_MS = 9 * 3600 * 1000;
+const AUDIT_PAGE_DEFAULT = 100;
+// 수정 요청 본문의 키 → 감사 로그에 남길 필드 이름(값은 남기지 않는다)
+const EDIT_AUDIT_FIELDS = [['name', 'name'], ['landingUrl', 'landingUrl'], ['image', 'logo']];
+const REFUND_AUDIT_FIELDS = ['status', 'refundedAt', 'refundMemo'];
+// 서비스 안에서 이런 오류가 나면 입력 탓이 아니라 프로그램 문제다 — 문구(내부 필드 이름 등)를 내보내지 않고 500
+const PROGRAM_ERRORS = [TypeError, ReferenceError, RangeError, SyntaxError];
+
+// 시작 점검: 관리자 작업(orders.js)이 감사 로그 작업 목록(audit-log.js)에 전부 있어야 한다.
+// 빠진 작업은 상태는 바뀌는데 기록이 남지 않으므로, 어긋나면 서버를 띄우지 않는다(Step 6 리뷰).
+const UNAUDITED_ACTIONS = ADMIN_ACTIONS.filter((action) => !AUDIT_ACTIONS.has(action));
+if (UNAUDITED_ACTIONS.length > 0) throw new Error(`감사 로그 작업 목록에 없는 관리자 작업: ${UNAUDITED_ACTIONS.join(', ')}`);
 
 /** ?status= → 알려진 상태 | undefined(전체). 모르는 값은 400 */
 function statusParam(url) {
@@ -53,6 +70,14 @@ function statusParam(url) {
   if (!status) return undefined;
   if (!KNOWN_STATUSES.has(status)) throw new HttpError(400, '알 수 없는 상태예요');
   return status;
+}
+
+/** ?limit= → 1~AUDIT_MAX 정수(없으면 100). 그 밖은 400 */
+function auditLimitParam(url) {
+  const raw = url.searchParams.get('limit');
+  if (raw === null) return AUDIT_PAGE_DEFAULT;
+  if (!/^\d{1,6}$/.test(raw) || Number(raw) < 1) throw new HttpError(400, 'limit 은 1 이상 정수예요');
+  return Math.min(Number(raw), AUDIT_MAX);
 }
 
 /** 오늘(한국 시각) YYYYMMDD — 내려받는 파일 이름용 */
@@ -65,9 +90,11 @@ function clientIp(req, trustProxy) {
   return hops[hops.length - 1] || req.socket.remoteAddress || 'unknown';
 }
 
+const bearerToken = (req) => String(req.headers.authorization || '').replace(/^Bearer /, '');
+
 function isAdmin(req, adminToken) {
   if (!adminToken) return false;
-  const given = String(req.headers.authorization || '').replace(/^Bearer /, '');
+  const given = bearerToken(req);
   const a = crypto.createHash('sha256').update(given).digest();
   const b = crypto.createHash('sha256').update(adminToken).digest();
   return crypto.timingSafeEqual(a, b);
@@ -82,7 +109,7 @@ function createImageSaver(dataDir) {
   };
 }
 
-function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequested = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, business, payment = { provider: 'mock' }, fetch, now = Date.now, errorLog: givenErrorLog }) {
+function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequested = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, business, payment = { provider: 'mock' }, fetch, now = Date.now, errorLog: givenErrorLog, auditLog: givenAuditLog, adminGuard: adminGuardOptions = {} }) {
   const businessInfo = publicBusinessInfo(business);
   // 최근 문제 — index.js 가 백업 실패도 같은 곳에 쓰도록 밖에서 넘길 수 있다(그때 S3 키도 가릴 목록에 넣는다)
   const errorLog = givenErrorLog || createErrorLog({ now, secrets: [adminToken, webhookSecret, payment.tossSecretKey] });
@@ -112,6 +139,9 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     // 헬스체크는 인증 없이 매번 장부 전체를 읽는다 — 마구 두드려 디스크 I/O 를 짜내지 못하게(리뷰 M).
     // fly 탐침은 15초 간격(분당 4회)이라 분당 30회면 넉넉하다
     health: createRateLimiter({ limit: limits.health || DEFAULT_LIMITS.health, windowMs: limits.windowMs, now }),
+    // 위조 웹훅 실패만 센다(정상 PG 웹훅은 세지 않음) — 퍼부어서 최근 문제(50건)를 위조 기록으로 덮지 못하게(Step 6 리뷰).
+    // 넘치면 429 → 진짜 PG 라면 재전송한다
+    webhookFailures: createRateLimiter({ limit: limits.webhookFailures || DEFAULT_LIMITS.webhookFailures, windowMs: limits.windowMs, now }),
   };
   // 사이트 이동은 같은 사람·같은 광고 하루 한 번만 센다(클라이언트 보고값이라 반복 보고로 부풀릴 수 있음)
   let visitDay = '';
@@ -128,6 +158,8 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     return true;
   };
   const reporterSalt = crypto.randomBytes(16).toString('hex');
+  const adminGuard = createAdminGuard({ ...adminGuardOptions, now });
+  const audit = givenAuditLog || createAuditLog({ store, now }); // 테스트는 실패하는 감사 로그를 넣어 본다
 
   const limit = (req, name) => {
     if (!limiters[name].hit(clientIp(req, trustProxy))) throw new HttpError(429, '잠시 후 다시 시도해 주세요');
@@ -137,6 +169,7 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
       return fn();
     } catch (err) {
       if (err instanceof HttpError) throw err;
+      if (PROGRAM_ERRORS.some((E) => err instanceof E)) throw err; // → 500 일반 문구(최근 문제에는 남는다)
       throw new HttpError(400, err.message);
     }
   };
@@ -152,6 +185,7 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
         errorLog.record('pg', `웹훅 결제 조회 실패(재전송 대기): ${err.message}`);
         throw new HttpError(503, '잠시 후 다시 보내 주세요');
       }
+      if (!limiters.webhookFailures.hit(clientIp(req, trustProxy))) throw new HttpError(429, '잠시 후 다시 시도해 주세요');
       console.warn('[webhook] 검증 실패', err.message);
       errorLog.record('webhook', `웹훅 검증 실패: ${err.message}`);
       throw new HttpError(401, '서명이 올바르지 않아요');
@@ -174,25 +208,59 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
   };
 
   function sendCsv(res, status) {
-    const csv = ordersToCsv(service.exportRows(status));
+    const rows = service.exportRows(status);
     const filename = `ad-dodge-orders-${kstDay(now())}${status ? `-${status}` : ''}.csv`;
-    send(res, 200, csv, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${filename}"`, 'cache-control': 'no-store' });
+    send(res, 200, ordersToCsv(rows), { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${filename}"`, 'cache-control': 'no-store' });
+    return rows.length;
   }
 
-  /** 광고(advertisers) 밖의 관리자 API — 환불 완료 기록·CSV 내보내기·최근 문제 */
+  /**
+   * 성공한 관리자 작업 → 감사 로그(즉시 쓰기). 누가 = 가린 IP + 토큰 지문.
+   * 작업은 이미 장부에 반영된 뒤다 — 기록이 실패해도 응답을 500 으로 뒤집지 않고 최근 문제에 남긴다(Step 6 리뷰)
+   */
+  const auditAction = (req, action, { orderId, advertiserId, fields = [], note } = {}) => {
+    try {
+      audit.record({ ip: clientIp(req, trustProxy), token: bearerToken(req), action, orderId, advertiserId, fields, note });
+    } catch (err) {
+      console.error('[audit] 감사 기록 실패', action, err && err.message);
+      errorLog.record('audit', `감사 기록 실패(${String(action).slice(0, 20)}): ${err && err.message ? err.message : err}`);
+    }
+  };
+
+  /** 광고(advertisers) 밖의 관리자 API — 환불 완료 기록·CSV 내보내기·최근 문제·관리 기록 */
   async function handleAdminOps(req, res, url, parts) {
-    if (req.method === 'GET' && parts.length === 2 && parts[1] === 'export.csv') return sendCsv(res, statusParam(url));
+    if (req.method === 'GET' && parts.length === 2 && parts[1] === 'export.csv') {
+      const status = statusParam(url);
+      const count = sendCsv(res, status);
+      return auditAction(req, 'export', { note: `status=${status || 'all'} · ${count}건` });
+    }
     if (req.method === 'GET' && parts.length === 2 && parts[1] === 'errors') return sendJson(res, 200, { errors: errorLog.list(), max: ERROR_LOG_MAX });
+    if (req.method === 'GET' && parts.length === 2 && parts[1] === 'audit') return sendJson(res, 200, { entries: audit.list(auditLimitParam(url)), max: AUDIT_MAX });
     if (req.method === 'POST' && parts.length === 4 && parts[1] === 'orders' && parts[3] === 'refund') {
       const body = parseJson(await readBody(req));
-      return sendJson(res, 200, asUserError(() => service.markRefunded(parts[2], { refundedAt: body.refundedAt, memo: body.memo })));
+      const done = asUserError(() => service.markRefunded(parts[2], { refundedAt: body.refundedAt, memo: body.memo }));
+      auditAction(req, 'refund', { orderId: done.orderId, advertiserId: done.advertiserId, fields: REFUND_AUDIT_FIELDS });
+      return sendJson(res, 200, done);
     }
     throw new HttpError(404, '찾을 수 없어요');
   }
 
+  /** 문지기: 토큰 검사 전에 IP별 버킷·차단 확인, 토큰이 틀리면 실패를 센다(넘치면 차단 + 최근 문제) */
+  function guardAdmin(req) {
+    const ip = clientIp(req, trustProxy);
+    if (!adminGuard.allow(ip)) throw new HttpError(429, '잠시 후 다시 시도해 주세요');
+    if (isAdmin(req, adminToken)) return;
+    if (adminGuard.fail(ip)) {
+      console.warn('[admin] 토큰 실패 반복 — 차단', maskIp(ip));
+      errorLog.record('admin', `관리자 토큰 실패 반복 — ${maskIp(ip)} 를 ${adminGuard.blockMinutes}분 차단했습니다`);
+      throw new HttpError(429, '잠시 후 다시 시도해 주세요');
+    }
+    throw new HttpError(401, '관리자 인증이 필요해요');
+  }
+
   async function handleAdmin(req, res, url, parts) {
-    if (!isAdmin(req, adminToken)) throw new HttpError(401, '관리자 인증이 필요해요');
-    // parts: ['admin', 'advertisers', id?, action?] | ['admin', 'orders', orderId, 'refund'] | ['admin', 'export.csv'] | ['admin', 'errors']
+    guardAdmin(req);
+    // parts: ['admin', 'advertisers', id?, action?] | ['admin', 'orders', orderId, 'refund'] | ['admin', 'export.csv'] | ['admin', 'errors'] | ['admin', 'audit']
     if (parts[1] !== 'advertisers') return handleAdminOps(req, res, url, parts);
     if (req.method === 'GET' && parts.length === 2) {
       sendJson(res, 200, service.listAdvertisers(statusParam(url)));
@@ -200,11 +268,16 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     }
     if (req.method === 'POST' && parts.length === 4 && parts[3] === 'edit') {
       const body = parseJson(await readBody(req));
-      sendJson(res, 200, asUserError(() => service.editAdvertiser(parts[2], body)));
+      const edited = asUserError(() => service.editAdvertiser(parts[2], body));
+      const fields = EDIT_AUDIT_FIELDS.filter(([key]) => (key === 'image' ? Boolean(body.image) : body[key] !== undefined)).map(([, field]) => field);
+      auditAction(req, 'edit', { orderId: edited.orderId, advertiserId: edited.advertiserId, fields });
+      sendJson(res, 200, edited);
       return;
     }
     if (req.method === 'POST' && parts.length === 4) {
-      sendJson(res, 200, asUserError(() => service.adminAction(parts[2], parts[3])));
+      const changed = asUserError(() => service.adminAction(parts[2], parts[3]));
+      auditAction(req, parts[3], { orderId: changed.orderId, advertiserId: changed.advertiserId, fields: ['status'] });
+      sendJson(res, 200, changed);
       return;
     }
     throw new HttpError(404, '찾을 수 없어요');

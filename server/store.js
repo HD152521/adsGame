@@ -11,7 +11,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const EMPTY_STATE = Object.freeze({ orders: {}, kills: {}, reports: {}, runs: {}, adStats: {}, challenges: {} });
+const EMPTY_STATE = Object.freeze({ orders: {}, kills: {}, reports: {}, runs: {}, adStats: {}, challenges: {}, audit: [] }); // audit = 관리자 감사 로그(server/audit-log.js)
 const LAZY_WRITE_MS = 1000;
 
 function loadState(file) {
