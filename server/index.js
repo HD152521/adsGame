@@ -11,7 +11,8 @@
 //   TOSS_VA_BANK      가상계좌 은행 코드(선택, 기본 20 우리은행)
 //   FREE_MODE=1       테스트 모드: 결제 없이 주문 즉시 출연(로컬 기능 테스트 전용)
 //   DEV_DEPOSIT=1     "입금 시뮬레이션" 버튼·엔드포인트 켜기(로컬 전용 — 운영에서 켜면 공짜 광고가 된다)
-//   MODERATION_MODE   review-all(기본) | auto-approve(로컬 데모 전용)
+//   MODERATION_MODE   review-all(기본) | vision(Google Vision SafeSearch + 얼굴 감지) | auto-approve(로컬 데모 전용 — 운영 모드 금지)
+//   GOOGLE_VISION_API_KEY  Google Cloud Vision API 키(MODERATION_MODE=vision 일 때 필수, 로그에 찍지 않는다)
 //   TRUST_PROXY=1     리버스 프록시 뒤에서 X-Forwarded-For로 IP 판별
 //   NODE_ENV=production  운영 모드 — 사업자 정보(BIZ_*·HOSTING_PROVIDER) 필수, FREE_MODE·DEV_DEPOSIT 금지(server/business.js)
 //   BIZ_NAME · BIZ_OWNER · BIZ_REG_NO · BIZ_ADDRESS · BIZ_PHONE · BIZ_EMAIL · BIZ_MAIL_ORDER_NO · HOSTING_PROVIDER
@@ -50,7 +51,7 @@ if (payment.provider === 'toss' && payment.tossSecretKey.startsWith('test_')) co
 const port = Number(process.env.PORT || 5173);
 const devMode = process.env.DEV_DEPOSIT === '1';
 const freeMode = process.env.FREE_MODE === '1';
-const moderationMode = process.env.MODERATION_MODE || 'review-all';
+const moderationMode = M.readModerationMode(process.env);
 
 // 모의 입금이 켜져 있으면 주문번호만 알면 누구나 공짜로 출연시킬 수 있다(보안 리뷰 M2) —
 // 이 컴퓨터 밖에서 접속할 수 없게 루프백에만 묶는다.
@@ -66,7 +67,7 @@ const app = createApp({
   payment,
   devMode,
   freeMode,
-  classifier: moderationMode === 'auto-approve' ? M.autoApproveClassifier() : M.reviewAllClassifier(),
+  classifier: M.createClassifier(process.env),
   trustProxy: process.env.TRUST_PROXY === '1',
   business: readBusinessInfo(process.env),
 });

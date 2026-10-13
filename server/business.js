@@ -7,8 +7,11 @@
 //   로컬 테스트 모드(start-test.cmd, NODE_ENV 없음)는 비어 있어도 뜨고 화면에 "사업자 정보 준비 중"이 나온다.
 //   결제 설정(PAYMENT_PROVIDER·TOSS_SECRET_KEY·TOSS_VA_BANK)은 모드와 상관없이 점검한다 —
 //   PAYMENT_PROVIDER=toss 인데 키가 없으면 결제가 안 되므로 운영이든 로컬이든 띄우지 않는다(server/payments.js).
+//   검수 설정(MODERATION_MODE·GOOGLE_VISION_API_KEY)도 늘 점검한다 — vision 인데 키가 없으면 띄우지 않고,
+//   auto-approve(전부 승인)는 운영 모드에서 띄우지 않는다(server/moderation.js checkModerationConfig).
 
 const { checkPaymentConfig } = require('./payments.js');
+const { checkModerationConfig } = require('./moderation.js');
 
 const BUSINESS_FIELDS = [
   { env: 'BIZ_NAME', key: 'name', required: true },
@@ -45,13 +48,14 @@ function formatErrors(env, info) {
   return errors;
 }
 
-/** 서버 시작 전 점검 → 문제 목록(비었으면 통과). 사업자 정보는 운영 모드에서만, 결제 설정은 늘 점검 */
+/** 서버 시작 전 점검 → 문제 목록(비었으면 통과). 사업자 정보는 운영 모드에서만, 결제·검수 설정은 늘 점검 */
 function checkStartupConfig(env) {
-  const paymentErrors = checkPaymentConfig(env);
-  if (!isProductionMode(env)) return paymentErrors;
+  const production = isProductionMode(env);
+  const commonErrors = [...checkPaymentConfig(env), ...checkModerationConfig(env, { production })];
+  if (!production) return commonErrors;
   const info = readBusinessInfo(env);
   const missing = BUSINESS_FIELDS.filter((f) => f.required && !info[f.key]).map((f) => `${f.env} 환경변수가 필요합니다(사업자 정보 법정 표시).`);
-  return [...missing, ...formatErrors(env, info), ...paymentErrors];
+  return [...missing, ...formatErrors(env, info), ...commonErrors];
 }
 
 /** GET /api/business 응답 — 필수 값이 다 있어야 ready */

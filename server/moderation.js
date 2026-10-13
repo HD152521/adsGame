@@ -5,7 +5,14 @@
 //   이미지 내용(선정성·폭력·얼굴) 판정은 classifier로 분리했다 — 외부 AI 이미지 필터 키가 생기면
 //   같은 인터페이스({ classify({image}) → 'approve'|'review'|'reject' })로 꽂는다.
 //   키가 없는 기본값(reviewAllClassifier)은 이미지 광고를 전부 관리자 승인 대기열로 보낸다.
+//   MODERATION_MODE=vision 이면 Google Cloud Vision(SafeSearch + 얼굴 감지) 분류기를 쓴다(server/moderation-vision.js).
+//   검수 설정 점검(checkModerationConfig)은 서버 시작 전에 돈다(server/business.js checkStartupConfig):
+//     · vision 인데 GOOGLE_VISION_API_KEY 가 없으면 운영·로컬 모두 시작 거부
+//     · auto-approve(전부 승인)는 운영 모드에서 시작 거부
+//     · 알 수 없는 MODERATION_MODE 는 시작 거부(오타로 조용히 다른 모드가 되지 않게)
 //   실행 검증: apps/ad-dodge 안에서 node --test (server/moderation.test.js)
+
+const { createVisionClassifier } = require('./moderation-vision.js');
 
 const NAME_MAX = 16;
 const MAX_IMAGE_BYTES = 512 * 1024;
@@ -95,6 +102,34 @@ function autoApproveClassifier() {
   return { name: 'auto-approve', classify: async () => 'approve' };
 }
 
+const MODERATION_MODES = ['review-all', 'auto-approve', 'vision'];
+const DEFAULT_MODERATION_MODE = 'review-all';
+
+function readModerationMode(env) {
+  return String(env.MODERATION_MODE || DEFAULT_MODERATION_MODE).trim();
+}
+
+/** 검수 설정 점검 → 문제 목록(비었으면 통과). 메시지에 키 값은 싣지 않는다 */
+function checkModerationConfig(env, { production }) {
+  const mode = readModerationMode(env);
+  if (!MODERATION_MODES.includes(mode)) return [`MODERATION_MODE 는 ${MODERATION_MODES.join(' | ')} 중 하나여야 합니다.`];
+  if (mode === 'vision' && !String(env.GOOGLE_VISION_API_KEY || '').trim()) {
+    return ['MODERATION_MODE=vision 이면 GOOGLE_VISION_API_KEY 환경변수가 필요합니다(Google Cloud Vision API 키).'];
+  }
+  if (mode === 'auto-approve' && production) {
+    return ['MODERATION_MODE=auto-approve 는 운영 모드에서 쓸 수 없습니다(모든 광고가 검수 없이 승인됩니다).'];
+  }
+  return [];
+}
+
+/** 환경변수대로 분류기를 만든다(checkModerationConfig 를 통과한 뒤에 부를 것). fetch 는 테스트 주입용 */
+function createClassifier(env, { fetch } = {}) {
+  const mode = readModerationMode(env);
+  if (mode === 'auto-approve') return autoApproveClassifier();
+  if (mode === 'vision') return createVisionClassifier({ apiKey: env.GOOGLE_VISION_API_KEY, ...(fetch ? { fetch } : {}) });
+  return reviewAllClassifier();
+}
+
 module.exports = {
   NAME_MAX,
   MAX_IMAGE_BYTES,
@@ -103,4 +138,8 @@ module.exports = {
   validateLandingUrl,
   reviewAllClassifier,
   autoApproveClassifier,
+  MODERATION_MODES,
+  readModerationMode,
+  checkModerationConfig,
+  createClassifier,
 };

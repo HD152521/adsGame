@@ -76,6 +76,17 @@ test('publicBusinessInfo: 필수 값이 다 있어야 ready, 비면 ready=false'
   assert.equal(B.publicBusinessInfo(undefined).ready, false);
 });
 
+test('checkStartupConfig: 운영 모드에서 MODERATION_MODE=vision 인데 GOOGLE_VISION_API_KEY 가 없으면 거부', () => {
+  const prod = { ...FULL_ENV, NODE_ENV: 'production' };
+  assert.ok(B.checkStartupConfig({ ...prod, MODERATION_MODE: 'vision' }).some((e) => e.includes('GOOGLE_VISION_API_KEY')));
+  assert.deepEqual(B.checkStartupConfig({ ...prod, MODERATION_MODE: 'vision', GOOGLE_VISION_API_KEY: 'AIzaFAKE-entry-key' }), []);
+});
+
+test('checkStartupConfig: 운영 모드에서 MODERATION_MODE=auto-approve 는 거부, 로컬에서는 허용', () => {
+  assert.ok(B.checkStartupConfig({ ...FULL_ENV, NODE_ENV: 'production', MODERATION_MODE: 'auto-approve' }).some((e) => e.includes('auto-approve')));
+  assert.deepEqual(B.checkStartupConfig({ MODERATION_MODE: 'auto-approve', FREE_MODE: '1' }), []);
+});
+
 async function getBusiness(business) {
   const app = createApp({
     dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ad-dodge-biz-')),
@@ -116,7 +127,7 @@ const START_TIMEOUT_MS = 15000; // 전체 테스트가 병렬로 돌 때 느린 
 /** 진입점을 띄워 { started, code, output } — "[server]" 로그가 나오면 시작된 것으로 보고 끈다 */
 function runEntry(env) {
   const childEnv = { ...process.env, ...BASE_ENV, DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'ad-dodge-entry-')), ...env };
-  for (const k of ['NODE_ENV', 'FREE_MODE', 'DEV_DEPOSIT', 'PAYMENT_PROVIDER', 'TOSS_SECRET_KEY', 'TOSS_VA_BANK', ...Object.keys(FULL_ENV)]) if (!(k in env)) delete childEnv[k];
+  for (const k of ['NODE_ENV', 'FREE_MODE', 'DEV_DEPOSIT', 'PAYMENT_PROVIDER', 'TOSS_SECRET_KEY', 'TOSS_VA_BANK', 'MODERATION_MODE', 'GOOGLE_VISION_API_KEY', ...Object.keys(FULL_ENV)]) if (!(k in env)) delete childEnv[k];
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [ENTRY], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
@@ -166,4 +177,26 @@ test('[진입점] 운영 모드 + 토스 키가 있으면 시작된다(시작 �
   const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, PAYMENT_PROVIDER: 'toss', TOSS_SECRET_KEY: 'test_sk_fakeKeyForEntryTest0000', WEBHOOK_SECRET: '' });
   assert.equal(r.started, true, r.output);
   assert.match(r.output, /결제=toss/);
+});
+
+test('[진입점] 운영 모드에서 MODERATION_MODE=vision 인데 GOOGLE_VISION_API_KEY 가 없으면 시작을 거부한다', async () => {
+  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, MODERATION_MODE: 'vision' });
+  assert.equal(r.started, false, r.output);
+  assert.notEqual(r.code, 0);
+  assert.match(r.output, /GOOGLE_VISION_API_KEY/);
+});
+
+test('[진입점] 운영 모드에서 MODERATION_MODE=auto-approve 면 시작을 거부한다', async () => {
+  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, MODERATION_MODE: 'auto-approve' });
+  assert.equal(r.started, false, r.output);
+  assert.notEqual(r.code, 0);
+  assert.match(r.output, /auto-approve/);
+});
+
+test('[진입점] 운영 모드 + vision 키가 있으면 시작된다(시작 시 Vision 호출 없음, 키는 로그에 안 나옴)', async () => {
+  const key = 'AIzaFAKE-entry-key-should-not-leak';
+  const r = await runEntry({ NODE_ENV: 'production', ...FULL_ENV, MODERATION_MODE: 'vision', GOOGLE_VISION_API_KEY: key });
+  assert.equal(r.started, true, r.output);
+  assert.match(r.output, /검수=vision/);
+  assert.ok(!r.output.includes(key));
 });

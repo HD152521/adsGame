@@ -53,7 +53,8 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 | `TOSS_VA_BANK` | 가상계좌 은행 코드(선택, 기본 `20` 우리은행). 발급 가능 은행: 03·06·07·11·20·31·32·34·37·39·71·81·88 |
 | `FREE_MODE=1` | 테스트 모드 — 결제 없이 주문 즉시 출연 (127.0.0.1 전용) |
 | `DEV_DEPOSIT=1` | 입금 시뮬레이션 버튼·엔드포인트. **운영에서 켜면 공짜 광고가 된다** |
-| `MODERATION_MODE` | `review-all`(기본: 이미지 광고는 관리자 승인) / `auto-approve`(로컬 데모) |
+| `MODERATION_MODE` | `review-all`(기본: 이미지 광고는 관리자 승인) / `vision`(Google Vision SafeSearch·얼굴 감지 — 선정·폭력 높으면 거절, 애매·얼굴·이동 주소는 관리자 검토, API 실패도 검토) / `auto-approve`(로컬 데모 — 운영 모드에서는 시작 거부) |
+| `GOOGLE_VISION_API_KEY` | `MODERATION_MODE=vision` 일 때 필수(없으면 시작 거부). 환경변수로만 넣고 로그에 찍지 않는다 |
 | `HOST` | 기본 `0.0.0.0`. `FREE_MODE`·`DEV_DEPOSIT`이면 늘 `127.0.0.1` |
 | `DATA_DIR` | 기본 `./data` (db.json + uploads/, git 제외) |
 | `TRUST_PROXY=1` | 리버스 프록시 뒤에서 X-Forwarded-For로 IP 판별 |
@@ -114,6 +115,7 @@ Vercel은 서버리스라 `server/`(장부 파일·업로드·SSE)가 돌지 않
 | `server/payments.js` | PG 인터페이스 + **모의 PG** (가상계좌·HMAC 서명 웹훅) + 제공자 선택(`PAYMENT_PROVIDER`) |
 | `server/payments-toss.js` | **토스페이먼츠 가상계좌** provider (발급·웹훅 secret 검증·결제 조회 재확인) |
 | `server/moderation.js` | 이름 필터·이미지 형식 검증 + 분류기 인터페이스 |
+| `server/moderation-vision.js` | Google Vision 이미지 검수 분류기(SafeSearch + 얼굴 감지, 실패 시 검토) |
 | `server/app.js` | HTTP 라우팅·레이트 리밋·관리자 인증·정적 파일(허용 목록) |
 | `server/stats.js` | 판 기록·오늘 백분위·도전장·광고 성과·킬 순위(위조 가능한 값이라 범위·상한으로 묶음) |
 | `server/backup.js` | 장부 주기 백업 |
