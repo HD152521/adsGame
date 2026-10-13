@@ -10,7 +10,7 @@ const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map((m) => m[1]);
 
 test('스크립트는 의존 순서대로 로드된다(app.js가 마지막)', () => {
-  assert.deepEqual(scripts, ['rng.js', 'paper.js', 'shares.js', 'game.js', 'seed-ledger.js', 'render.js', 'input.js', 'deathcard.js', 'sound.js', 'api.js', 'buy.js', 'app.js']);
+  assert.deepEqual(scripts, ['rng.js', 'paper.js', 'shares.js', 'game.js', 'seed-ledger.js', 'render.js', 'input.js', 'deathcard.js', 'sound.js', 'api.js', 'bizinfo.js', 'buy.js', 'app.js']);
 });
 
 test('외부(http/https/프로토콜 상대) 스크립트·스타일이 없다', () => {
@@ -60,4 +60,48 @@ test('[이동 주소] 구매 폼에 이동 주소 입력칸, 시작 화면·약�
   assert.match(html, /광고주 사이트로 이동/);
   const terms = fs.readFileSync(path.join(__dirname, 'terms.html'), 'utf8');
   assert.match(terms, /사이트로 이동/);
+});
+
+// ── [법정 표시] 사업자 정보·개인정보처리방침 ─────────────────────────────────────
+const readPage = (f) => fs.readFileSync(path.join(__dirname, f), 'utf8');
+/** html 안에서 start 표시부터 end 표시 직전까지 */
+const between = (page, start, end) => page.slice(page.indexOf(start), page.indexOf(end, page.indexOf(start)));
+const startScreen = between(html, 'id="screen-start"', 'id="screen-dead"');
+const buyScreen = between(html, 'id="screen-buy"', '</main>');
+
+function assertBizFooter(part, name) {
+  assert.match(part, /data-biz-info/, `${name}: 사업자 정보 칸`);
+  assert.match(part, /사업자 정보 준비 중/, `${name}: 서버 없을 때 기본 문구`);
+  assert.match(part, /href="privacy.html"/, `${name}: 개인정보처리방침 링크`);
+  assert.match(part, /개인정보처리방침/, `${name}: 링크 글자`);
+}
+
+test('[법정 표시] 시작 화면·광고 신청서 하단에 사업자 정보 칸과 개인정보처리방침 링크', () => {
+  assertBizFooter(startScreen, '시작 화면');
+  assertBizFooter(buyScreen, '신청서');
+  assert.match(buyScreen, /href="privacy.html" target="_blank" rel="noopener"/, '신청서에서는 새 탭(작성 중인 내용 유지)');
+});
+
+test('[법정 표시] 약관·개인정보처리방침 페이지에도 사업자 정보 칸, bizinfo.js 로 채운다', () => {
+  for (const f of ['terms.html', 'privacy.html']) {
+    const page = readPage(f);
+    assertBizFooter(page, f);
+    assert.match(page, /<script src="bizinfo.js"><\/script>/, `${f}: bizinfo.js`);
+    assert.doesNotMatch(page, /<script>/, `${f}: 인라인 스크립트 없음(CSP script-src 'self')`);
+    assert.doesNotMatch(page, /<script[^>]+src="(https?:)?\/\//, `${f}: 외부 스크립트 없음`);
+  }
+});
+
+test('[법정 표시] 약관의 사업자 정보·연락처 TODO가 치환식으로 바뀌었다', () => {
+  const terms = readPage('terms.html');
+  assert.doesNotMatch(terms, /TODO/);
+});
+
+test('[법정 표시] 개인정보처리방침: 수집 항목·목적·보유 기간·파기·제3자 제공·문의처', () => {
+  const privacy = readPage('privacy.html');
+  for (const must of ['IP', '해시', '접속 기록', '로고 이미지', '입금', '주문', '도전장 이름', '처리 목적', '보유', '파기', '제3자', 'PG', '문의']) {
+    assert.match(privacy, new RegExp(must), must);
+  }
+  assert.match(privacy, /class="doc-page"/, '게시판 문서 디자인');
+  assert.match(privacy, /href="style.css"/);
 });

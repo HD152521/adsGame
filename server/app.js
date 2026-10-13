@@ -3,6 +3,7 @@
 //
 // 공개 API
 //   GET  /api/config                 클라이언트 설정(모의 입금 버튼 노출 여부)
+//   GET  /api/business               사업자 정보(법정 표시, 환경변수) — 필수 값이 비면 ready=false
 //   GET  /api/ledger                 장부·지분·보스·공개 규칙
 //   GET  /api/events                 SSE: purchase / takedown / review / ledger(관리자 수정)
 //   POST /api/orders                 주문 생성 → 가상계좌
@@ -29,6 +30,7 @@ const { createOrderService } = require('./orders.js');
 const { createEventHub, createRateLimiter } = require('./realtime.js');
 const { HttpError, readBody, parseJson, sendJson, serveStatic } = require('./http-util.js');
 const { SEED_LEDGER } = require('../seed-ledger.js');
+const { publicBusinessInfo } = require('./business.js');
 
 const APP_ROOT = path.join(__dirname, '..');
 const DEFAULT_LIMITS = { orders: 5, kills: 60, reports: 10, challenges: 10, runs: 15, windowMs: 60_000 };
@@ -58,7 +60,8 @@ function createImageSaver(dataDir) {
   };
 }
 
-function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, now = Date.now }) {
+function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, business, now = Date.now }) {
+  const businessInfo = publicBusinessInfo(business);
   const hub = createEventHub();
   const provider = createMockProvider({ secret: webhookSecret, now });
   const store = createStore({ file: path.join(dataDir, 'db.json') });
@@ -162,6 +165,8 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode = false, freeMo
     switch (key) {
       case 'GET config':
         return sendJson(res, 200, { devDeposit: devMode, freeMode, provider: provider.name });
+      case 'GET business':
+        return sendJson(res, 200, businessInfo);
       case 'GET ledger':
         return sendJson(res, 200, service.getLedger());
       case 'GET events':

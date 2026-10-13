@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>개인정보처리방침 — 이건 광고입니다</title>
+  <link rel="icon" href="assets/logos/ad-wanted.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&family=Nanum+Gothic+Coding:wght@400;700&family=Nanum+Pen+Script&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="doc-page">
+  <main class="doc sheet" style="--tilt:-.3deg">
+    <span class="tape" style="left:44px;--tilt:-3deg"></span><span class="tape" style="right:36px;--tilt:5deg"></span>
+    <p><a href="/">← 게임으로</a></p>
+    <h1>개인정보처리방침</h1>
+    <p class="h" style="font-size:22px;margin:-8px 0 12px">무엇을 받고 · 왜 쓰고 · 언제 버리나</p>
+    <p class="doc__note">초안입니다. 사업자 등록 후 처리자 정보(맨 아래 사업자 정보)와 함께 확정합니다. 회원 가입은 없고, 이름·전화번호를 따로 받지 않습니다.</p>
+
+    <h2>1. 수집하는 항목</h2>
+    <ul>
+      <li><b>신고자 IP 해시</b> — "이 광고 신고하기"를 누르면 접속 IP를 비밀값과 섞어 되돌릴 수 없는 해시(16자리)로만 저장합니다. IP 원문은 장부에 남기지 않습니다.</li>
+      <li><b>접속 기록</b> — 접속 IP, 요청 주소, 접속 시각. 과도한 요청 차단(레이트 리밋)과 사이트 이동 중복 집계 방지용으로 서버 메모리에 잠시 두고, 오류가 나면 서버 로그에 남을 수 있습니다.</li>
+      <li><b>업로드 로고 이미지</b> — 로고 광고 신청 시 올린 이미지. 올리기 전에 브라우저에서 256px로 줄여 위치정보(EXIF)를 지웁니다.</li>
+      <li><b>주문·입금 정보</b> — 광고 이름, 이동 주소, 칸 수, 금액, 주문번호, 발급된 가상계좌, 입금 확인 시각·상태. 입금자 실명·계좌 등 결제 정보는 PG사가 처리하고, 화면에는 표시하지 않습니다.</li>
+      <li><b>도전장 이름</b> — 도전장을 만들 때 직접 적은 이름(16자 이내)과 기록(초).</li>
+      <li>내 기기에만 남는 것 — 마지막 주문번호, 도전장에 쓴 이름(브라우저 저장소). 서버로 보내지 않으며 브라우저에서 지울 수 있습니다.</li>
+    </ul>
+
+    <h2>2. 처리 목적</h2>
+    <ul>
+      <li>광고 주문·가상계좌 발급·입금 확인·출연·환불 처리</li>
+      <li>광고 검수와 권리 침해·불법 광고 신고 처리(같은 사람의 중복 신고 구분)</li>
+      <li>어뷰징·과도한 요청 차단, 광고 성과(사이트 이동 수) 부풀리기 방지</li>
+      <li>도전장 링크를 받은 사람에게 보낸 사람 이름과 목표 기록 표시</li>
+    </ul>
+
+    <h2>3. 보유 기간과 파기</h2>
+    <ul>
+      <li>주문·입금 정보: 전자상거래법에 따라 <b>계약·대금결제 기록 5년</b>, <b>소비자 불만·분쟁 처리 기록 3년</b>, <b>표시·광고 기록 6개월</b> 보관 후 파기합니다.</li>
+      <li>업로드 로고 이미지: 광고가 내려가거나 거절·환불된 뒤 표시·광고 기록 보관 기간(6개월)이 지나면 파기합니다.</li>
+      <li>신고자 IP 해시: 해당 신고 처리(삭제·복구)가 끝나면 지웁니다. 해시를 만드는 비밀값은 서버를 다시 시작할 때마다 바뀌어 이전 해시와 이어지지 않습니다.</li>
+      <li>접속 기록: 레이트 리밋용은 1분, 이동 중복 확인용은 그날 자정(한국 시간)에 메모리에서 사라집니다. 서버 로그는 <b>3개월</b> 이내 보관 후 파기합니다.</li>
+      <li>도전장 이름: 최근 5,000장만 보관하고, 넘치면 오래된 것부터 지웁니다.</li>
+      <li>장부 백업 사본은 1시간마다 만들어 이틀치(48개)만 두고 오래된 것부터 지웁니다.</li>
+      <li>파기 방법: 전자 파일은 복구할 수 없게 삭제합니다. 종이로 출력한 기록은 두지 않습니다.</li>
+    </ul>
+
+    <h2>4. 제3자 제공과 처리 위탁</h2>
+    <ul>
+      <li><b>PG사(결제대행)</b> — 가상계좌 발급과 입금 확인을 위해 주문번호·금액을 제공합니다. 입금자 정보는 PG사가 직접 받아 처리합니다. PG사 이름은 계약 후 이 자리에 적습니다.</li>
+      <li><b>호스팅 사업자</b> — 서버·저장소 운영을 맡깁니다(아래 사업자 정보의 호스팅).</li>
+      <li>위 경우와 법령에 따른 요청 말고는 개인정보를 다른 곳에 주지 않습니다. 광고·마케팅 목적으로 팔거나 넘기지 않습니다.</li>
+    </ul>
+
+    <h2>5. 이용자의 권리</h2>
+    <ul>
+      <li>내 주문·광고 정보의 열람·정정·삭제·처리 정지를 요청할 수 있습니다. 주문번호와 함께 아래 문의처로 알려 주세요.</li>
+      <li>법정 보관 기간 중인 기록은 그 기간 동안 삭제 대신 따로 분리해 보관합니다.</li>
+    </ul>
+
+    <h2>6. 문의처</h2>
+    <ul>
+      <li>개인정보 보호 책임자: 아래 사업자 정보의 대표자</li>
+      <li>연락처: 아래 사업자 정보의 이메일·전화</li>
+      <li>그 밖의 신고·상담: 개인정보침해신고센터(국번 없이 118), 개인정보분쟁조정위원회(1833-6972)</li>
+    </ul>
+
+    <!-- 사업자 정보(법정 표시): bizinfo.js 가 /api/business 로 채운다. 서버 없으면 이 문구 그대로 -->
+    <footer class="biz" aria-label="사업자 정보">
+      <div class="biz__info" data-biz-info>사업자 정보 준비 중</div>
+      <p class="biz__links"><a href="terms.html">이용약관</a> · <a href="privacy.html"><b>개인정보처리방침</b></a></p>
+    </footer>
+  </main>
+  <script src="bizinfo.js"></script>
+</body>
+</html>

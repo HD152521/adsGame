@@ -51,8 +51,18 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 | `FREE_MODE=1` | 테스트 모드 — 결제 없이 주문 즉시 출연 (127.0.0.1 전용) |
 | `DEV_DEPOSIT=1` | 입금 시뮬레이션 버튼·엔드포인트. **운영에서 켜면 공짜 광고가 된다** |
 | `MODERATION_MODE` | `review-all`(기본: 이미지 광고는 관리자 승인) / `auto-approve`(로컬 데모) |
+| `HOST` | 기본 `0.0.0.0`. `FREE_MODE`·`DEV_DEPOSIT`이면 늘 `127.0.0.1` |
 | `DATA_DIR` | 기본 `./data` (db.json + uploads/, git 제외) |
 | `TRUST_PROXY=1` | 리버스 프록시 뒤에서 X-Forwarded-For로 IP 판별 |
+| `NODE_ENV=production` | **운영 모드**. 아래 사업자 정보 필수 값이 비거나 형식이 틀리면, 또는 `FREE_MODE`·`DEV_DEPOSIT`이 켜져 있으면 서버가 시작을 거부한다 |
+| `BIZ_NAME` · `BIZ_OWNER` · `BIZ_REG_NO` · `BIZ_ADDRESS` · `BIZ_PHONE` · `BIZ_EMAIL` · `HOSTING_PROVIDER` | 사업자 정보(법정 표시) — 운영 모드 필수. `BIZ_REG_NO`는 000-00-00000, `BIZ_EMAIL`은 메일 형식 |
+| `BIZ_MAIL_ORDER_NO` | 통신판매업 신고번호 — 운영 모드에서도 선택(PG 구매안전서비스 확인증 뒤에 신고하므로). 비면 화면에 "신고 준비 중" |
+
+### 운영 모드와 사업자 정보(법정 표시)
+- 운영 모드 = `NODE_ENV=production` 하나로 정한다. 이 값이 없으면(로컬·`start-test.cmd`) 사업자 정보가 비어도 서버가 뜨고 화면에 "사업자 정보 준비 중"이 나온다.
+- 서버는 `GET /api/business`로 값을 내주고(`ready` = 필수 값이 다 있음), `bizinfo.js`가 시작 화면·광고 신청서·`terms.html`·`privacy.html` 하단에 **textContent로만** 채운다.
+- 서버가 없는 Vercel 정적 미리보기에서는 요청이 실패하므로 HTML에 적힌 "사업자 정보 준비 중"이 그대로 보인다.
+- 실제 값은 코드·장부에 적지 않고 호스팅의 비밀 환경변수로만 넣는다.
 
 ## Vercel (정적 미리보기)
 Vercel은 서버리스라 `server/`(장부 파일·업로드·SSE)가 돌지 않는다. 올리면 **게임만** 동작하고(관리사무소 광고만 날아옴),
@@ -71,19 +81,21 @@ Vercel은 서버리스라 `server/`(장부 파일·업로드·SSE)가 돌지 않
 | `deathcard.js` | 사망 카드(저격 문구 포함) 1080×1920 + 공유 |
 | `api.js` / `buy.js` | 서버 API·SSE / 구매 화면(가상계좌·폴링·저격 링크) |
 | `app.js` | 화면 전환·루프·실시간 배너·킬 순위·신고 배선 |
-| `admin.html` / `terms.html` | 관리자 검수 / 약관 초안 |
+| `admin.html` / `terms.html` / `privacy.html` | 관리자 검수 / 약관 초안 / 개인정보처리방침 초안 |
+| `bizinfo.js` | 하단 사업자 정보 표시(`/api/business` → textContent, 서버 없으면 "준비 중") |
 | `server/orders.js` | 주문 상태기계: 입금 대기 → (검수) → 출연 / 가림 / 환불 필요 |
 | `server/payments.js` | PG 인터페이스 + **모의 PG** (가상계좌·HMAC 서명 웹훅) |
 | `server/moderation.js` | 이름 필터·이미지 형식 검증 + 분류기 인터페이스 |
 | `server/app.js` | HTTP 라우팅·레이트 리밋·관리자 인증·정적 파일(허용 목록) |
 | `server/stats.js` | 판 기록·오늘 백분위·도전장·광고 성과·킬 순위(위조 가능한 값이라 범위·상한으로 묶음) |
 | `server/backup.js` | 장부 주기 백업 |
+| `server/business.js` | 사업자 정보 환경변수 읽기·운영 모드 시작 점검 |
 | `sound.js` | 종이 소리 합성·음소거 |
 
 ## 실제 운영 전에 바꿀 것
 1. **실제 PG 연동** — 사업자 등록·PG 가입 후 `server/payments.js`에 같은 인터페이스(`issueVirtualAccount`, `verifyWebhook`)로 구현. PG 문서의 웹훅 검증 방식 그대로
 2. **이미지 자동 필터** — 외부 AI 필터 키로 `classify()` 구현(선정성·폭력·얼굴). 없으면 관리자 수동 승인
-3. `terms.html`의 사업자 정보·연락처 TODO
+3. 사업자 정보 환경변수(`BIZ_*`·`HOSTING_PROVIDER`)를 호스팅 비밀값으로 넣고 `NODE_ENV=production`으로 띄우기. `privacy.html`의 PG사 이름 채우기
 4. 호스팅 — 파일 저장소를 쓰므로 영구 디스크가 있는 단일 Node 인스턴스 (서버리스 불가)
 
 ## 난이도 튜닝

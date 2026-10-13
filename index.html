@@ -90,6 +90,12 @@
         </ul>
         <a class="rules__link" href="terms.html">약관 · 환불 · 신고 안내</a>
       </section>
+
+      <!-- 사업자 정보(법정 표시): bizinfo.js 가 /api/business 로 채운다. 서버 없으면 이 문구 그대로 -->
+      <footer class="biz" aria-label="사업자 정보">
+        <div class="biz__info" data-biz-info>사업자 정보 준비 중</div>
+        <p class="biz__links"><a href="terms.html">이용약관</a> · <a href="privacy.html"><b>개인정보처리방침</b></a></p>
+      </footer>
     </section>
 
     <!-- 사망: 분실 공고 -->
@@ -222,6 +228,12 @@
             <button id="btn-copy-snipe" class="btn-ink" type="button">저격 링크 복사</button>
           </div>
         </div>
+
+        <!-- 사업자 정보(법정 표시): bizinfo.js 가 /api/business 로 채운다. 서버 없으면 이 문구 그대로 -->
+        <footer class="biz" aria-label="사업자 정보">
+          <div class="biz__info" data-biz-info>사업자 정보 준비 중</div>
+          <p class="biz__links"><a href="terms.html" target="_blank" rel="noopener">이용약관</a> · <a href="privacy.html" target="_blank" rel="noopener"><b>개인정보처리방침</b></a></p>
+        </footer>
       </article>
     </section>
   </main>
@@ -236,6 +248,7 @@
   <script src="deathcard.js"></script>
   <script src="sound.js"></script>
   <script src="api.js"></script>
+  <script src="bizinfo.js"></script>
   <script src="buy.js"></script>
   <script src="app.js"></script>
 </body>
