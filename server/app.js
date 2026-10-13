@@ -207,13 +207,6 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     return new HttpError(400, err.message);
   };
 
-  function sendCsv(res, status) {
-    const rows = service.exportRows(status);
-    const filename = `ad-dodge-orders-${kstDay(now())}${status ? `-${status}` : ''}.csv`;
-    send(res, 200, ordersToCsv(rows), { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${filename}"`, 'cache-control': 'no-store' });
-    return rows.length;
-  }
-
   /**
    * 성공한 관리자 작업 → 감사 로그(즉시 쓰기). 누가 = 가린 IP + 토큰 지문.
    * 작업은 이미 장부에 반영된 뒤다 — 기록이 실패해도 응답을 500 으로 뒤집지 않고 최근 문제에 남긴다(Step 6 리뷰)
@@ -227,12 +220,22 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
     }
   };
 
+  /**
+   * CSV 내려받기. 감사 기록을 응답 "전"에 남긴다(Step 6 리뷰 LOW) — 응답이 나간 뒤 서버가 멈춰도 내려받은 흔적은 장부에 있다.
+   * 기록 실패는 auditAction 이 최근 문제로 돌리고 응답은 그대로 보낸다
+   */
+  function sendCsv(req, res, status) {
+    const rows = service.exportRows(status);
+    const csv = ordersToCsv(rows);
+    const filename = `ad-dodge-orders-${kstDay(now())}${status ? `-${status}` : ''}.csv`;
+    auditAction(req, 'export', { note: `status=${status || 'all'} · ${rows.length}건` });
+    send(res, 200, csv, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${filename}"`, 'cache-control': 'no-store' });
+  }
+
   /** 광고(advertisers) 밖의 관리자 API — 환불 완료 기록·CSV 내보내기·최근 문제·관리 기록 */
   async function handleAdminOps(req, res, url, parts) {
     if (req.method === 'GET' && parts.length === 2 && parts[1] === 'export.csv') {
-      const status = statusParam(url);
-      const count = sendCsv(res, status);
-      return auditAction(req, 'export', { note: `status=${status || 'all'} · ${count}건` });
+      return sendCsv(req, res, statusParam(url));
     }
     if (req.method === 'GET' && parts.length === 2 && parts[1] === 'errors') return sendJson(res, 200, { errors: errorLog.list(), max: ERROR_LOG_MAX });
     if (req.method === 'GET' && parts.length === 2 && parts[1] === 'audit') return sendJson(res, 200, { entries: audit.list(auditLimitParam(url)), max: AUDIT_MAX });

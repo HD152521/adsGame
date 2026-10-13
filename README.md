@@ -39,6 +39,7 @@
 ```bash
 cd apps/ad-dodge
 node --test                      # 전체 테스트 (게임 + 서버 통합)
+node e2e/run.js                  # 브라우저 E2E (헤드리스 Chrome/Edge — 아래 "E2E·실기기 확인")
 
 # 기능 테스트(결제 없이 바로 추가): start-test.cmd 더블클릭 → http://127.0.0.1:5173
 
@@ -49,6 +50,22 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 ```
 
 서버 없이 `python -m http.server`로 열어도 하우스 광고로 게임만 돈다(구매 버튼 비활성).
+
+### E2E·실기기 확인 (계획서 Step 7)
+- **브라우저 E2E**: `node e2e/run.js` — 설치된 Chrome(없으면 Edge)을 `--headless=new`로 띄우고 Node 내장 WebSocket(**Node 22+**)으로
+  DevTools 프로토콜을 직접 다룬다(`e2e/cdp.js`, npm 패키지 없음). 다른 경로의 브라우저는 `E2E_BROWSER=실행 파일 경로`.
+  - 흐름(`e2e/flow.e2e.js`): 시작 → 플레이(방향키·드래그 입력 주입) → 사망 → 사망 카드 생성·저장 → 도전장 만들기·링크 열기 →
+    광고 붙이기(테스트 모드 무료, 로고 업로드) → 출연(장부 100%·게시판) → 내 광고에 맞아 사망 → 신고 → 관리자 화면에서 떼어 내기 →
+    게임 게시판·장부에서 사라짐 → 이동 주소 광고에 맞으면 그 주소로 즉시 이동 → 관리자 화면(환불 완료 폼·CSV 내려받기·최근 문제·관리 기록) → 콘솔 오류 0
+  - 서버는 운영체제 임시 폴더의 data·`FREE_MODE=1`·`MODERATION_MODE=auto-approve`·임의 포트로 자식 프로세스로 띄우고, 끝나면 브라우저·서버·임시 폴더를 정리한다.
+    저장소 `data/`는 건드리지 않는다(실행 전후 지문 비교 출력).
+  - 브라우저는 127.0.0.1 밖 주소를 풀지 않는다. 테스트 광고 이동 주소는 가짜 도메인 `ad-landing.test` → 127.0.0.1 로 돌려서 외부로 나가지 않는다
+    (게시판 글꼴 Google Fonts 도 막히므로 그 네트워크 실패만 콘솔 오류에서 뺀다). 게임 코드에 테스트 훅은 없다.
+  - 종료 코드: **0 통과 / 1 실패 / 2 건너뜀**(브라우저를 못 찾음·Node 22 미만 — 안내 문구 출력). 기본 `node --test`에는 섞이지 않는다
+    (느리고 브라우저 필요). `e2e/e2e-support.test.js`(브라우저 없이 도는 도구 단위 테스트)만 `node --test`에 들어간다.
+- **실기기 수동 확인**: [실기기 체크리스트](docs/device-checklist.md) — 인스타그램 인앱(iOS·안드로이드)·iOS 사파리·안드로이드 크롬별
+  터치·멀티터치, 소리 아이콘(무음 모드), 사망 카드 저장/공유(인앱 다운로드 제약), 광고 URL 이동, 가상계좌 화면, 가로/세로·노치 안전 영역, 저사양 프레임.
+  실기기는 루프백 전용 테스트 모드에 닿지 않으므로 배포 주소(토스 테스트 키)로 사람이 확인한다.
 
 | 환경변수 | 설명 |
 |---|---|
@@ -177,6 +194,9 @@ Vercel은 서버리스라 `server/`(장부 파일·업로드·SSE)가 돌지 않
 | `server/shutdown.js` | SIGTERM·SIGINT → lazy 쓰기 flush 후 종료 |
 | `server/container-entry.js` | 컨테이너 진입점 — 볼륨 주인 넘기고 비root로 강등 |
 | `sound.js` | 종이 소리 합성·음소거 |
+| `e2e/run.js` · `e2e/flow.e2e.js` | 브라우저 E2E 실행기(임시 폴더·테스트 서버·헤드리스 브라우저 정리) · 핵심 흐름 시나리오 |
+| `e2e/cdp.js` · `e2e/harness.js` | DevTools 프로토콜 드라이버(내장 WebSocket) · 테스트 서버 환경변수·임시 폴더·업로드용 PNG |
+| `docs/device-checklist.md` | 실기기 수동 확인 체크리스트(기기별 항목·기대 결과·확인 칸) |
 
 ## 실제 운영 전에 바꿀 것
 1. **실제 PG 연결 확인** — 토스페이먼츠 provider는 구현됨(`PAYMENT_PROVIDER=toss`). PG 계약·키 발급 후 위 "실제 연결 확인 절차"대로 확인. 환불(취소)은 아직 관리자 수동

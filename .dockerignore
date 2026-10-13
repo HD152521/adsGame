@@ -3,6 +3,7 @@
 dom-stub.js
 data
 docs
+e2e
 start-test.cmd
 node_modules
 .git

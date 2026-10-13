@@ -131,9 +131,11 @@ const ADMIN_AUDIT_FIELD = { status: '상태', name: '이름', landingUrl: '이�
         return;
       }
       if (!window.confirm(`${ad.name} · ${ad.amount.toLocaleString('ko-KR')}원 — 환불 완료로 기록할까요? 되돌릴 수 없습니다.`)) return;
+      // datetime-local 은 분 단위라 주문과 같은 분을 고르면 초가 잘려 "주문 이전"이 된다(E2E 에서 발견) — 주문 시각 아래로는 내리지 않는다
+      const refundedAt = new Date(Math.max(when.getTime(), ad.createdAt)).toISOString();
       save.disabled = true;
       try {
-        await request(`/api/admin/orders/${encodeURIComponent(ad.orderId)}/refund`, 'POST', { refundedAt: when.toISOString(), memo: memo.value });
+        await request(`/api/admin/orders/${encodeURIComponent(ad.orderId)}/refund`, 'POST', { refundedAt, memo: memo.value });
         await load();
       } catch (err) {
         error.textContent = err.message;

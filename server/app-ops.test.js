@@ -164,3 +164,58 @@ test('[최근 문제] 외부에서 넘긴 errorLog 를 쓴다(백업 실패를 i
   app.errorLog.record('backup', '외부 백업 업로드 실패: HTTP 403');
   assert.ok(app.errorLog.list().some((e) => e.kind === 'backup'));
 });
+
+/** 별도 서버 — 감사 로그를 갈아 끼우고, 응답 끝(res.end)이 언제 불리는지 순서를 적는다 */
+async function startWithAudit(auditLog) {
+  const ordered = createApp({
+    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ad-dodge-ops-audit-')),
+    adminToken: ADMIN,
+    webhookSecret: WEBHOOK_SECRET,
+    classifier: M.reviewAllClassifier(),
+    auditLog,
+  });
+  const events = [];
+  // 앱 핸들러보다 먼저 붙어서 요청마다 res.end 를 감싼다(앱 코드는 그대로)
+  ordered.server.prependListener('request', (req, res) => {
+    const end = res.end;
+    res.end = function endWithMark(...args) {
+      events.push(`end ${req.url}`);
+      return end.apply(this, args);
+    };
+  });
+  await new Promise((r) => ordered.server.listen(0, '127.0.0.1', r));
+  return { app: ordered, events, url: `http://127.0.0.1:${ordered.server.address().port}` };
+}
+
+test('[CSV 감사 순서] CSV 내보내기 감사 기록은 응답을 보내기 "전"에 남는다(Step 6 리뷰 LOW)', async () => {
+  const s = await startWithAudit({
+    record: (entry) => s.events.push(`audit ${entry.action} ${entry.note}`),
+    list: () => [],
+  });
+  try {
+    const res = await fetch(`${s.url}/api/admin/export.csv`, { headers: auth });
+    assert.equal(res.status, 200);
+    await res.text();
+    const csv = s.events.filter((e) => /export|end \/api\/admin\/export\.csv/.test(e));
+    assert.deepEqual(csv, ['audit export status=all · 0건', 'end /api/admin/export.csv']);
+  } finally {
+    s.app.close();
+  }
+});
+
+test('[CSV 감사 순서] 감사 기록이 실패해도 CSV 응답은 그대로 200(최근 문제에 남음)', async () => {
+  const s = await startWithAudit({
+    record: () => { throw new Error('디스크 가득'); },
+    list: () => [],
+  });
+  try {
+    const res = await fetch(`${s.url}/api/admin/export.csv`, { headers: auth });
+    assert.equal(res.status, 200);
+    const bytes = Buffer.from(await res.arrayBuffer()); // text() 는 BOM 을 떼고 주므로 바이트로 본다
+    assert.ok(bytes.toString('utf8').startsWith('\ufeff주문번호,'));
+    const { errors } = await (await fetch(`${s.url}/api/admin/errors`, { headers: auth })).json();
+    assert.ok(errors.some((e) => e.kind === 'audit' && /디스크 가득/.test(e.message)));
+  } finally {
+    s.app.close();
+  }
+});
