@@ -1,0 +1,7 @@
+# Vercel은 정적 미리보기 전용 — 서버 코드·테스트·로컬 데이터는 올리지 않는다
+server/
+data/
+docs/
+*.test.js
+dom-stub.js
+start-test.cmd

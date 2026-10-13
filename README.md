@@ -54,6 +54,13 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 | `DATA_DIR` | 기본 `./data` (db.json + uploads/, git 제외) |
 | `TRUST_PROXY=1` | 리버스 프록시 뒤에서 X-Forwarded-For로 IP 판별 |
 
+## Vercel (정적 미리보기)
+Vercel은 서버리스라 `server/`(장부 파일·업로드·SSE)가 돌지 않는다. 올리면 **게임만** 동작하고(관리사무소 광고만 날아옴),
+광고 구매는 "게시판 공사 중"으로 꺼진다. 실서비스는 영구 디스크가 있는 Node 호스팅(계획서 Step 4: Fly.io)에서.
+- 프레임워크 프리셋: Other · 빌드 명령 없음 · 출력 디렉터리: 루트
+- `.vercelignore`로 서버 코드·테스트는 배포에서 뺀다, `vercel.json`이 서버와 같은 보안 헤더를 붙인다
+- 배포 준비 계획: `docs/launch-plan.md`
+
 ## 구조
 | 파일 | 역할 |
 |---|---|
