@@ -47,6 +47,8 @@ const { createAdminGuard } = require('./admin-guard.js');
 const { createAuditLog, maskIp, AUDIT_MAX, AUDIT_ACTIONS } = require('./audit-log.js');
 
 const APP_ROOT = path.join(__dirname, '..');
+// 광고 접수 준비 중(SALES_OPEN=0) — 주문·칸 추가·결제 웹훅을 받지 않는다(server/business.js isSalesOpen)
+const SALES_CLOSED = '광고 접수 준비 중이에요. 곧 열어요';
 const DEFAULT_LIMITS = { orders: 5, kills: 60, reports: 10, challenges: 10, runs: 15, health: 30, webhookFailures: 30, windowMs: 60_000 };
 const VISIT_DEDUP_MAX = 50_000; // 하루치 (IP·광고) 쌍 기억 상한 — 넘치면 비우고 다시
 const KNOWN_STATUSES = new Set(Object.values(ORDER_STATUS));
@@ -109,7 +111,7 @@ function createImageSaver(dataDir) {
   };
 }
 
-function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequested = false, freeMode = false, classifier, limits = DEFAULT_LIMITS, trustProxy = false, business, payment = { provider: 'mock' }, fetch, now = Date.now, errorLog: givenErrorLog, auditLog: givenAuditLog, adminGuard: adminGuardOptions = {} }) {
+function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequested = false, freeMode = false, salesOpen = true, classifier, limits = DEFAULT_LIMITS, trustProxy = false, business, payment = { provider: 'mock' }, fetch, now = Date.now, errorLog: givenErrorLog, auditLog: givenAuditLog, adminGuard: adminGuardOptions = {} }) {
   const businessInfo = publicBusinessInfo(business);
   // 최근 문제 — index.js 가 백업 실패도 같은 곳에 쓰도록 밖에서 넘길 수 있다(그때 S3 키도 가릴 목록에 넣는다)
   const errorLog = givenErrorLog || createErrorLog({ now, secrets: [adminToken, webhookSecret, payment.tossSecretKey] });
@@ -306,7 +308,7 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
         return sendJson(res, health.ok ? 200 : 503, health.ok ? { ok: true } : { ok: false, error: '장부를 읽을 수 없습니다' });
       }
       case 'GET config':
-        return sendJson(res, 200, { devDeposit: devMode, freeMode, provider: provider.name });
+        return sendJson(res, 200, { devDeposit: devMode, freeMode, salesOpen, provider: provider.name });
       case 'GET business':
         return sendJson(res, 200, businessInfo);
       case 'GET ledger':
@@ -315,6 +317,7 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
         return hub.handle(req, res, clientIp(req, trustProxy));
       case 'POST orders': {
         limit(req, 'orders');
+        if (!salesOpen) throw new HttpError(503, SALES_CLOSED);
         if (parts[2] === 'topup') {
           const body = parseJson(await readBody(req));
           const topup = await service.createTopup(String(parts[1]), body).catch((err) => {
@@ -351,6 +354,7 @@ function createApp({ dataDir, adminToken, webhookSecret, devMode: devModeRequest
       }
       case 'POST payments':
         if (parts[1] !== 'webhook') break;
+        if (!salesOpen) throw new HttpError(503, SALES_CLOSED);
         return handleWebhook(req, res);
       case 'POST dev':
         if (!devMode || parts[1] !== 'deposit') break;

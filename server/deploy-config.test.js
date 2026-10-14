@@ -27,7 +27,8 @@ test('.dockerignore: 테스트·장부(data)·문서·로컬 스크립트를 이
 
 test('fly.toml: 영구 볼륨 /data, 내부 포트 8080, https 강제, /api/health 헬스체크, 단일 인스턴스, 프록시 신뢰', () => {
   const toml = read('fly.toml');
-  assert.match(toml, /^app = "[^"]*CHANGE-ME[^"]*"/m, '앱 이름은 placeholder');
+  assert.match(toml, /^app = "adsgame"/m, '앱 이름은 실제 fly 앱(adsgame)');
+  assert.match(toml, /^\s*SALES_OPEN = "0"/m, '사업자 등록·PG 심사 전에는 광고 접수 준비 중');
   assert.match(toml, /\[mounts\][^[]*destination = "\/data"/);
   assert.match(toml, /DATA_DIR = "\/data"/);
   assert.match(toml, /NODE_ENV = "production"/);

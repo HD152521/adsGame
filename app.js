@@ -465,7 +465,7 @@ function wireSoundToggle(doc, sound) {
   paintButton();
 }
 
-function wireButtons({ doc, screens, session, buyFlow, refreshKills, sound }) {
+function wireButtons({ doc, screens, session, buyFlow, closedLabel, refreshKills, sound }) {
   const $ = (id) => doc.getElementById(id);
   const startRound = (event) => {
     sound.unlock();
@@ -486,7 +486,7 @@ function wireButtons({ doc, screens, session, buyFlow, refreshKills, sound }) {
       buyFlow.open();
     });
   }
-  if (!buyFlow) $('btn-buy').textContent = '게시판 공사 중';
+  if (!buyFlow) $('btn-buy').textContent = closedLabel;
   wireSoundToggle(doc, sound);
 }
 
@@ -553,7 +553,9 @@ async function bootApp() {
     },
   });
   const refreshKills = () => (server.online ? api.killRanking().then((r) => renderKillRanking(doc, r)).catch(() => {}) : Promise.resolve());
-  const buyFlow = server.online
+  // 서버는 있지만 광고 접수 준비 중(SALES_OPEN=0)이면 구매 화면을 열지 않는다
+  const salesOpen = server.online && server.config.salesOpen !== false;
+  const buyFlow = salesOpen
     ? createBuyFlow({
       doc,
       api,
@@ -567,7 +569,7 @@ async function bootApp() {
     })
     : null;
 
-  wireButtons({ doc, screens, session, buyFlow, refreshKills, sound });
+  wireButtons({ doc, screens, session, buyFlow, closedLabel: server.online ? '광고 접수 준비 중' : '게시판 공사 중', refreshKills, sound });
   wireRealtime({ server, worldStore, session, banner: createBanner($('live-banner')), sound });
   worldStore.apply(server.ledger);
   refreshKills();

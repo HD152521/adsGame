@@ -14,6 +14,7 @@
 //   MODERATION_MODE   review-all(기본) | vision(Google Vision SafeSearch + 얼굴 감지) | auto-approve(로컬 데모 전용 — 운영 모드 금지)
 //   GOOGLE_VISION_API_KEY  Google Cloud Vision API 키(MODERATION_MODE=vision 일 때 필수, 로그에 찍지 않는다)
 //   TRUST_PROXY=1     리버스 프록시(fly 등) 한 단 뒤에서 X-Forwarded-For 마지막 값으로 IP 판별(fly.toml 기본 1)
+//   SALES_OPEN=0      광고 접수 준비 중 — 주문·칸 추가·웹훅을 503 으로 닫고 게임만 연다. 사업자 정보·결제 키 없이 운영 모드로 뜬다(기본 1)
 //   NODE_ENV=production  운영 모드 — 사업자 정보(BIZ_*·HOSTING_PROVIDER) 필수, FREE_MODE·DEV_DEPOSIT 금지,
 //                     ADMIN_TOKEN 32자 이상·단조롭지 않게, 모의 결제(mock) 금지(server/business.js)
 //   종료: SIGTERM·SIGINT 를 받으면 밀린 lazy 쓰기를 디스크에 쓰고 끝낸다(server/shutdown.js)
@@ -24,11 +25,12 @@
 //                     외부 백업(선택) — 다섯 값이 모두 있을 때만 백업 파일을 S3 호환 저장소에도 올린다(server/sigv4.js).
 //                     업로드 실패는 서버를 멈추지 않고 관리자 화면 "최근 문제"에 남는다
 
+const crypto = require('node:crypto');
 const path = require('node:path');
 const { createApp } = require('./app.js');
 const { startBackups } = require('./backup.js');
 const M = require('./moderation.js');
-const { checkStartupConfig, readBusinessInfo, isProductionMode } = require('./business.js');
+const { checkStartupConfig, readBusinessInfo, isProductionMode, isSalesOpen } = require('./business.js');
 const { readPaymentConfig } = require('./payments.js');
 const { installShutdown } = require('./shutdown.js');
 const { createErrorLog } = require('./error-log.js');
@@ -53,7 +55,10 @@ if (startupErrors.length > 0) {
   console.error('[config] 설정이 맞지 않아 서버를 시작하지 않습니다. README의 환경변수 표를 확인하세요.');
   process.exit(1);
 }
-const payment = readPaymentConfig(process.env);
+const salesOpen = isSalesOpen(process.env);
+// 접수 준비 중: 결제를 쓰지 않는다 — 주문·웹훅 길은 app.js 가 503 으로 닫고, 안쪽 제공자는 아무도 모르는 일회용 비밀값의 모의 PG
+const payment = salesOpen ? readPaymentConfig(process.env) : { provider: 'mock' };
+if (!salesOpen) console.warn('[config] SALES_OPEN=0 — 광고 접수 준비 중(주문·칸 추가·결제 웹훅 받지 않음). 게임만 엽니다.');
 if (payment.provider === 'toss' && payment.tossSecretKey.startsWith('test_')) console.warn('[config] 토스 테스트 키(test_sk_) — 실제 돈은 오가지 않습니다.');
 
 const port = Number(process.env.PORT || 5173);
@@ -73,7 +78,7 @@ if (s3.error) console.warn(`[config] 외부 백업을 꺼 둡니다: ${s3.error}
 
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 const adminToken = requireSecret('ADMIN_TOKEN');
-const webhookSecret = payment.provider === 'mock' ? requireSecret('WEBHOOK_SECRET') : undefined;
+const webhookSecret = !salesOpen ? crypto.randomBytes(32).toString('hex') : payment.provider === 'mock' ? requireSecret('WEBHOOK_SECRET') : undefined;
 // 최근 문제(관리자 화면) — 설명 안에 비밀값이 섞여 들어와도 가린다
 const errorLog = createErrorLog({ secrets: [adminToken, webhookSecret, payment.tossSecretKey, s3.config && s3.config.secretAccessKey, s3.config && s3.config.accessKeyId] });
 const app = createApp({
@@ -84,6 +89,7 @@ const app = createApp({
   payment,
   devMode,
   freeMode,
+  salesOpen,
   classifier: M.createClassifier(process.env),
   trustProxy: process.env.TRUST_PROXY === '1',
   business: readBusinessInfo(process.env),
@@ -97,7 +103,7 @@ startBackups({
 });
 
 app.server.listen(port, host, () => {
-  console.info(`[server] http://${devMode || freeMode ? "127.0.0.1" : "localhost"}:${app.server.address().port}  (운영모드=${isProductionMode(process.env) ? '켜짐' : '꺼짐'}, 테스트모드=${freeMode ? '켜짐' : '꺼짐'}, 결제=${payment.provider}, 모의입금=${devMode && payment.provider === 'mock' ? '켜짐' : '꺼짐'}, 검수=${moderationMode}, 외부백업=${s3.config ? '켜짐' : '꺼짐'})`);
+  console.info(`[server] http://${devMode || freeMode ? "127.0.0.1" : "localhost"}:${app.server.address().port}  (운영모드=${isProductionMode(process.env) ? '켜짐' : '꺼짐'}, 광고접수=${salesOpen ? '열림' : '준비 중'}, 테스트모드=${freeMode ? '켜짐' : '꺼짐'}, 결제=${payment.provider}, 모의입금=${devMode && payment.provider === 'mock' ? '켜짐' : '꺼짐'}, 검수=${moderationMode}, 외부백업=${s3.config ? '켜짐' : '꺼짐'})`);
   console.info(`[server] 관리자: /admin.html`);
 });
 

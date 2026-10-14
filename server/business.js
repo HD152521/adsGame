@@ -42,6 +42,12 @@ function isProductionMode(env) {
   return env.NODE_ENV === 'production';
 }
 
+/** 광고 접수(판매) 여부 — SALES_OPEN=0 이면 "광고 접수 준비 중": 주문·칸 추가·웹훅을 받지 않고 게임만 연다.
+ *  돈을 받지 않으므로 사업자 정보·결제 키 없이도 운영 모드로 띄울 수 있다(사업자 등록·PG 심사 전 공개용) */
+function isSalesOpen(env) {
+  return String(env.SALES_OPEN ?? '1').trim() !== '0';
+}
+
 /** 환경변수 → { name, owner, regNo, address, phone, email, mailOrderNo, hostingProvider } (없으면 '') */
 function readBusinessInfo(env) {
   return Object.fromEntries(BUSINESS_FIELDS.map((f) => [f.key, String(env[f.env] || '').trim().slice(0, FIELD_MAX_LENGTH)]));
@@ -73,17 +79,20 @@ function productionSecretErrors(env) {
   const errors = [];
   const weakness = adminTokenWeakness(env.ADMIN_TOKEN);
   if (weakness) errors.push(`ADMIN_TOKEN 이 약합니다 — 운영 모드에서는 ${weakness}(무작위 값 권장: openssl rand -hex 32).`);
-  if (readPaymentConfig(env).provider === 'mock') errors.push('운영 모드에서는 모의 결제(PAYMENT_PROVIDER=mock)를 쓸 수 없습니다 — PAYMENT_PROVIDER=toss 와 TOSS_SECRET_KEY 를 넣으세요.');
+  if (isSalesOpen(env) && readPaymentConfig(env).provider === 'mock') errors.push('운영 모드에서는 모의 결제(PAYMENT_PROVIDER=mock)를 쓸 수 없습니다 — PAYMENT_PROVIDER=toss 와 TOSS_SECRET_KEY 를 넣으세요.');
   return errors;
 }
 
 /** 서버 시작 전 점검 → 문제 목록(비었으면 통과). 사업자 정보는 운영 모드에서만, 결제·검수 설정은 늘 점검 */
 function checkStartupConfig(env) {
   const production = isProductionMode(env);
-  const commonErrors = [...checkPaymentConfig(env), ...checkModerationConfig(env, { production })];
+  const salesOpen = isSalesOpen(env);
+  // 접수 준비 중이면 결제를 쓰지 않으므로 결제 설정은 보지 않는다
+  const commonErrors = [...(salesOpen ? checkPaymentConfig(env) : []), ...checkModerationConfig(env, { production })];
   if (!production) return commonErrors;
   const info = readBusinessInfo(env);
-  const missing = BUSINESS_FIELDS.filter((f) => f.required && !info[f.key]).map((f) => `${f.env} 환경변수가 필요합니다(사업자 정보 법정 표시).`);
+  // 사업자 정보 법정 표시는 판매(통신판매)를 할 때의 의무 — 접수 준비 중이면 비어도 띄운다(화면엔 "준비 중")
+  const missing = salesOpen ? BUSINESS_FIELDS.filter((f) => f.required && !info[f.key]).map((f) => `${f.env} 환경변수가 필요합니다(사업자 정보 법정 표시).`) : [];
   return [...missing, ...formatErrors(env, info), ...productionSecretErrors(env), ...commonErrors];
 }
 
@@ -94,4 +103,4 @@ function publicBusinessInfo(info) {
   return { ready, ...Object.fromEntries(BUSINESS_FIELDS.map((f) => [f.key, safe[f.key] || ''])) };
 }
 
-module.exports = { BUSINESS_FIELDS, PRODUCTION_ADMIN_TOKEN_MIN, adminTokenWeakness, isProductionMode, readBusinessInfo, checkStartupConfig, publicBusinessInfo };
+module.exports = { BUSINESS_FIELDS, PRODUCTION_ADMIN_TOKEN_MIN, adminTokenWeakness, isProductionMode, isSalesOpen, readBusinessInfo, checkStartupConfig, publicBusinessInfo };

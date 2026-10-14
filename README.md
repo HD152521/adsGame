@@ -86,6 +86,7 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 |---|---|---|---|
 | `NODE_ENV` | 운영 | `production` (`fly.toml`·컨테이너 기본값) | **운영 모드** 스위치. 켜지면 사업자 정보 필수 값, 관리자 토큰 강도, `toss` 결제, `FREE_MODE`·`DEV_DEPOSIT`·`auto-approve` 금지를 시작 전에 점검하고 하나라도 틀리면 `[config] …` 줄을 남기고 시작을 거부한다. 로컬 컨테이너 확인은 `development` |
 | `ADMIN_TOKEN` | 필수(늘) | `openssl rand -hex 32` 출력(hex 64자) | 관리자 토큰. 늘 16자+, **운영 모드는 32자+ · 서로 다른 문자 10종+ · 로컬 기본값·자리표시 낱말(`local-admin-token`·`changeme` 등) 금지**. 관리자 경로는 IP별 분당 120회, 토큰 실패 5분 10회 초과 시 15분 429. 교체는 [운영 매뉴얼](docs/operations.md#관리자-토큰-교체) |
+| `SALES_OPEN` | 선택 | `0` (`fly.toml`, 접수 열 때 `1`) | `0` 이면 광고 접수 준비 중 — 주문·칸 추가·결제 웹훅을 503 으로 닫고 게임만 연다. 이때는 사업자 정보(`BIZ_*`)·결제 키 없이도 운영 모드로 뜬다. 기본 `1`(접수 열림) |
 | `PAYMENT_PROVIDER` | 운영(`toss`) | `toss` (`fly.toml`) | `mock`(기본, 모의 PG) / `toss`(토스페이먼츠 가상계좌). 다른 값이면 시작 거부. **운영 모드에서 `mock`(또는 비움)이면 시작 거부** |
 | `TOSS_SECRET_KEY` | 조건(`toss`) | `live_sk_…` (테스트는 `test_sk_…`) | 토스페이먼츠 **시크릿 키**. 클라이언트 키(`…_ck_…`)가 아니다. 없거나 형식이 틀리면 시작 거부. `test_sk_` 면 시작 로그에 "실제 돈은 오가지 않습니다" 경고 |
 | `TOSS_VA_BANK` | 선택 | `20` (2자리 은행 코드) | 가상계좌 은행 코드(기본 `20` 우리은행). 발급 가능: 03·06·07·11·20·31·32·34·37·39·71·81·88. 목록 밖이면 시작 거부 |
@@ -151,11 +152,11 @@ ADMIN_TOKEN=local-admin-token-1234 WEBHOOK_SECRET=local-webhook-secret-1234 DEV_
 | `Dockerfile` | `node:20-alpine`, 의존성 설치 없음, 코드는 root 소유(읽기 전용), `DATA_DIR=/data`, 포트 8080, 기본 `NODE_ENV=production`, `CMD ["node", "server/container-entry.js"]` |
 | `server/container-entry.js` | 컨테이너 진입점 — root로 시작했으면 `/data` 주인만 node(uid 1000)로 바꾸고 **즉시 권한을 내려놓은 뒤** 서버를 띄운다(Fly 새 볼륨은 root 소유라서). 서버 코드는 root로 돌지 않는다 |
 | `.dockerignore` | 테스트(`*.test.js`)·`data/`·`docs/`·`e2e/`·`start-test.cmd`·배포 설정 파일 제외 |
-| `fly.toml` | 앱 이름 placeholder(`ad-dodge-CHANGE-ME`), 리전 `nrt`, 볼륨 `ad_dodge_data` → `/data`, 내부 포트 8080, `force_https`, 헬스체크 `GET /api/health`, 머신 1대(자동 정지 끔), 비밀 아닌 `[env]`(`NODE_ENV`·`PORT`·`HOST`·`DATA_DIR`·`TRUST_PROXY`·`PAYMENT_PROVIDER`·`HOSTING_PROVIDER`) |
+| `fly.toml` | 앱 이름 `adsgame`, 리전 `nrt`, 볼륨 `ad_dodge_data` → `/data`, 내부 포트 8080, `force_https`, 헬스체크 `GET /api/health`, 머신 1대(자동 정지 끔), 비밀 아닌 `[env]`(`NODE_ENV`·`PORT`·`HOST`·`DATA_DIR`·`TRUST_PROXY`·`PAYMENT_PROVIDER`·`SALES_OPEN`·`HOSTING_PROVIDER`) |
 
 ### 처음 배포 (사람이 — 계정·결제 수단 필요)
 `apps/ad-dodge` 폴더에서 한다. `{앱}` = 정한 앱 이름, `{도메인}` = 산 도메인(H2).
-1. 로그인·앱 만들기: `fly auth login` → `fly.toml` 의 `app = "ad-dodge-CHANGE-ME"` 를 `{앱}` 으로 바꾸고 `fly apps create {앱}`
+1. 로그인·앱 만들기: `fly auth login` → (다른 이름을 쓰려면 `fly.toml` 의 `app = "adsgame"` 을 바꾸고) `fly apps create {앱}`
 2. 볼륨 하나(머신 1대 = 볼륨 1개): `fly volumes create ad_dodge_data --region nrt --size 1` → `fly volumes list` 로 하나뿐인지 확인
 3. 비밀값은 `fly secrets set` 으로만 넣는다(파일·코드·셸 기록에 남기지 않게 — 토큰은 바로 비밀번호 관리자에 보관):
    ```bash
